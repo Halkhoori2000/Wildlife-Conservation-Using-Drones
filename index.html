@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wildlife Conservation Using Drones — GIS &amp; AI Research</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #1f6feb;
+    --accent-hover: #388bfd;
+    --green: #3fb950;
+    --orange: #d29922;
+    --purple: #a371f7;
+    --red: #f85149;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 32px;
+  }
+
+  header h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  header p  { font-size: 14px; color: var(--muted); max-width: 720px; line-height: 1.65; margin-top: 6px; }
+
+  header .links { margin-top: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  header .links a {
+    font-size: 13px; color: var(--accent-hover); text-decoration: none;
+    border: 1px solid var(--border); padding: 4px 12px; border-radius: 6px;
+    transition: background 0.15s;
+  }
+  header .links a:hover { background: var(--border); }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+
+  h2 {
+    font-size: 18px; font-weight: 600; margin-bottom: 20px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--muted); margin-bottom: 16px;
+  }
+
+  /* Context banner */
+  .context-banner {
+    background: rgba(210, 153, 34, 0.08);
+    border: 1px solid rgba(210, 153, 34, 0.25);
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+    margin-bottom: 40px;
+  }
+  .context-banner strong { color: var(--orange); }
+
+  /* Stats row */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    text-align: center;
+  }
+
+  .stat-card .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent-hover);
+    margin-bottom: 4px;
+  }
+
+  .stat-card .stat-label {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+
+  /* Pipeline */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-bottom: 48px;
+  }
+
+  .pipeline-step {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .step-connector {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 36px;
+    flex-shrink: 0;
+  }
+
+  .step-dot {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .step-line {
+    width: 2px;
+    flex: 1;
+    min-height: 24px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+
+  .pipeline-step:last-child .step-line { display: none; }
+
+  .step-body {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 8px;
+    flex: 1;
+  }
+
+  .step-body h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .step-body p  { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+  .step-body .tool-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+    background: rgba(56,139,253,.12);
+    color: var(--accent-hover);
+    border: 1px solid rgba(56,139,253,.25);
+  }
+
+  /* Method cards */
+  .method-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+
+  .method-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+
+  .method-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .method-card p  { font-size: 13px; color: var(--muted); line-height: 1.65; }
+
+  .method-icon {
+    font-size: 22px;
+    margin-bottom: 10px;
+    display: block;
+  }
+
+  /* Stack table */
+  .stack-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-bottom: 48px;
+  }
+
+  .stack-table th {
+    text-align: left; padding: 10px 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--muted); font-weight: 600; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+
+  .stack-table td { padding: 10px 14px; border: 1px solid var(--border); line-height: 1.5; }
+  .stack-table tr:hover td { background: var(--surface); }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 20px 32px;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+  footer a { color: var(--accent-hover); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <p class="section-label" style="margin-bottom:6px">GIS · AI Research · CMPSC 442</p>
+  <h1>Wildlife Conservation Using Drones</h1>
+  <p>Geospatial analysis of 156 elephant poaching incidents in Tsavo, Kenya — building a GIS risk map, modelling UAV surveillance flight paths, and optimising ranger station placement using travel-cost surfaces.</p>
+  <div class="links">
+    <a href="https://github.com/Halkhoori2000/Wildlife-Conservation-Using-Drones" target="_blank">GitHub →</a>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Context -->
+  <div class="context-banner">
+    <strong>Research Presentation</strong> — CMPSC/DS 442 Artificial Intelligence, Penn State University (Fall 2022).
+    Based on the Penn State research paper <em>"Predicting and Preventing Elephant Poaching Incidents through Statistical Analysis, GIS-Based Risk Analysis, and Aerial Surveillance Flight Path Modeling"</em> (Shaffer &amp; Bishop).
+  </div>
+
+  <!-- Stats -->
+  <h2>Study Area — Tsavo, Kenya</h2>
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-value">156</div>
+      <div class="stat-label">Elephant poaching incidents analysed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">8,150</div>
+      <div class="stat-label">Square miles covered (Tsavo region)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">100</div>
+      <div class="stat-label">Monte Carlo simulations run to validate non-random distribution</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">64%</div>
+      <div class="stat-label">Decline in Central African elephant population 2002–2012</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">~17×</div>
+      <div class="stat-label">Cost reduction vs. conventional aerial surveillance ($3K vs $50K/week)</div>
+    </div>
+  </div>
+
+  <!-- Pipeline -->
+  <h2>Analysis Pipeline</h2>
+  <div class="pipeline">
+
+    <div class="pipeline-step">
+      <div class="step-connector">
+        <div class="step-dot" style="background:rgba(56,139,253,.15);color:var(--accent-hover);border:1px solid rgba(56,139,253,.3)">1</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <h3>Point Pattern Analysis</h3>
+        <p>156 poaching incident points mapped in Tsavo. 100 Monte Carlo simulations run to reject the null hypothesis that the distribution is random — a necessary precondition for building a predictive risk model.</p>
+        <span class="tool-tag">R-STAT + GeoDa (spatial autocorrelation)</span>
+      </div>
+    </div>
+
+    <div class="pipeline-step">
+      <div class="step-connector">
+        <div class="step-dot" style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3)">2</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <h3>GIS Risk Map</h3>
+        <p>Physical environment features correlated with poaching incidents: proximity to roads (easiest escape route), proximity to water sources, and land cover type. Risk values assigned per feature based on incident frequency — roads carry the highest risk weighting.</p>
+        <span class="tool-tag">ESRI ArcGIS + Spatial Analyst Extension</span>
+      </div>
+    </div>
+
+    <div class="pipeline-step">
+      <div class="step-connector">
+        <div class="step-dot" style="background:rgba(163,113,247,.15);color:var(--purple);border:1px solid rgba(163,113,247,.3)">3</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <h3>Drone Flight Path Modelling</h3>
+        <p>UAV surveillance paths planned over high-risk zones. Inputs: cruising altitude, speed, battery/fuel range, and camera horizontal field of view. Outputs: total distance per sortie and the ground coverage area per pass.</p>
+        <span class="tool-tag">ArduPilot Mega Planner</span>
+      </div>
+    </div>
+
+    <div class="pipeline-step">
+      <div class="step-connector">
+        <div class="step-dot" style="background:rgba(210,153,34,.15);color:var(--orange);border:1px solid rgba(210,153,34,.3)">4</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <h3>Ranger Station Placement</h3>
+        <p>Travel-cost surfaces computed over the Tsavo terrain: roads assigned lowest resistance, dense forest and rivers assigned highest. Optimal guard post locations minimise average response time to the highest-risk poaching zones.</p>
+        <span class="tool-tag">ArcGIS Travel-Cost Surface Analysis</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Key findings -->
+  <h2>Key Findings</h2>
+  <div class="method-grid">
+
+    <div class="method-card">
+      <h3>Roads = Highest Risk</h3>
+      <p>Poaching incidents cluster near roads — roads provide both easy access to wildlife and rapid escape routes after poaching. Road proximity was the strongest predictor of incident location in the composite risk map.</p>
+    </div>
+
+    <div class="method-card">
+      <h3>Non-Random Distribution</h3>
+      <p>Monte Carlo simulation confirmed the 156 incidents are not randomly distributed — they follow a deterministic spatial pattern tied to terrain features, making the distribution predictable and the risk model valid.</p>
+    </div>
+
+    <div class="method-card">
+      <h3>Drone Cost Advantage</h3>
+      <p>Conventional aerial wildlife surveillance costs ~$50,000/week. Drone-based surveillance costs ~$3,000/week — a 17× reduction that makes systematic coverage accessible to small conservation groups with limited budgets.</p>
+    </div>
+
+    <div class="method-card">
+      <h3>AI-Assisted Species ID</h3>
+      <p>WildTrack's footprint identification platform (WildTrackAI) achieves >90% species identification accuracy across 14 species, using morphometric analysis on UAV-captured footprint images uploaded to the cloud.</p>
+    </div>
+
+  </div>
+
+  <!-- Stack -->
+  <h2>Tools & Stack</h2>
+  <table class="stack-table">
+    <thead>
+      <tr><th>Tool</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>ESRI ArcGIS + Spatial Analyst</td><td>GIS risk map construction — correlating terrain features with poaching incident density</td></tr>
+      <tr><td>R-STAT</td><td>Point pattern analysis — 100 Monte Carlo simulations to validate non-random distribution</td></tr>
+      <tr><td>GeoDa</td><td>Spatial autocorrelation analysis on poaching incident points</td></tr>
+      <tr><td>ArduPilot Mega Planner</td><td>Drone flight path modelling from camera FOV, altitude, and battery constraints</td></tr>
+      <tr><td>Study Data</td><td>156 elephant poaching incidents in Tsavo, Kenya (provided by Kenyan conservation group)</td></tr>
+    </tbody>
+  </table>
+
+</div>
+
+<footer>
+  Wildlife Conservation Using Drones — CMPSC 442 · Penn State &nbsp;·&nbsp;
+  <a href="https://github.com/Halkhoori2000/Wildlife-Conservation-Using-Drones" target="_blank">GitHub</a>
+</footer>
+
+</body>
+</html>
