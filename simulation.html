@@ -64,7 +64,7 @@
 <div id="legend" class="panel">
   <span class="key" style="background:#ffe14d"></span>Camera FOV (60°)<br>
   <span class="key" style="background:#3fb950"></span>Covered ground<br>
-  <span class="key" style="background:#f85149"></span>Incident (illustrative)<br>
+  <span class="key" style="background:#f85149"></span>Incident — what the drone searches for (poacher camp, injured animal, vehicle) · illustrative<br>
   <span class="key" style="background:#ffffff;opacity:0.7"></span>Planned lawnmower path
 </div>
 
@@ -119,7 +119,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.18;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -129,21 +129,21 @@ const scene = new THREE.Scene();
   const c = document.createElement('canvas'); c.width = 2; c.height = 512;
   const g = c.getContext('2d');
   const grad = g.createLinearGradient(0, 0, 0, 512);
-  grad.addColorStop(0.00, '#6e9bd1');
-  grad.addColorStop(0.55, '#cfd9e8');
-  grad.addColorStop(0.80, '#f2d9b0');      // warm horizon band
-  grad.addColorStop(1.00, '#e8c89a');
+  grad.addColorStop(0.00, '#3d7ac4');
+  grad.addColorStop(0.50, '#9cc0e8');
+  grad.addColorStop(0.80, '#ffd9a0');      // golden horizon band
+  grad.addColorStop(1.00, '#f0b87a');
   g.fillStyle = grad; g.fillRect(0, 0, 2, 512);
   const t = new THREE.CanvasTexture(c);
   scene.background = t;
 })();
-scene.fog = new THREE.Fog(0xe3d2b4, 2400, 7800);          // distant warm haze
+scene.fog = new THREE.Fog(0xe8d2ac, 3200, 9500);          // distant warm haze
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 1, 20000);
-camera.position.set(-1750, 950, 1750);
+camera.position.set(-680, 420, 980);
 
 // ── lights: low warm sun for long shadows ────────────────────────────
-const sun = new THREE.DirectionalLight(0xffd9a8, 1.35);
+const sun = new THREE.DirectionalLight(0xffd9a8, 1.55);
 sun.position.set(-2200, 900, -1400);                       // late afternoon, low in the west
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -152,11 +152,11 @@ sun.shadow.camera.top  =  1400; sun.shadow.camera.bottom = -1400;
 sun.shadow.camera.near = 100;   sun.shadow.camera.far = 6000;
 sun.shadow.bias = -0.0004;
 scene.add(sun);
-scene.add(new THREE.HemisphereLight(0xbfd0e8, 0x9a7e55, 0.5));
+scene.add(new THREE.HemisphereLight(0xbfd0e8, 0x9a7e55, 0.62));
 
 // ── orbit controls ───────────────────────────────────────────────────
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 60, 0);
+controls.target.set(-200, 80, 0);
 controls.maxPolarAngle = 1.52;
 controls.minDistance = 60;
 controls.maxDistance = 6000;
@@ -177,9 +177,9 @@ function groundY(x, z){
 }
 
 // satellite imagery canvas (fallback: flat savanna tint until tiles arrive)
-const satCanvas = document.createElement('canvas'); satCanvas.width = satCanvas.height = 1024;
+const satCanvas = document.createElement('canvas'); satCanvas.width = satCanvas.height = 2048;
 const satCtx = satCanvas.getContext('2d');
-satCtx.fillStyle = '#8a8350'; satCtx.fillRect(0,0,1024,1024);
+satCtx.fillStyle = '#8a8350'; satCtx.fillRect(0,0,2048,2048);
 const satTex = new THREE.CanvasTexture(satCanvas);
 satTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
 
@@ -224,10 +224,20 @@ loadTiles(
     }
     bootIfReady();
   });
-loadTiles(
-  (dx,dy)=>'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+TILE_Z+'/'+(TILE_Y0+dy)+'/'+(TILE_X0+dx),
-  satCtx,
-  function(){ /* imagery is cosmetic — world boots on DEM result */ });
+// imagery at z16 (4x the detail of the DEM tiles), saturated GTA-ish grade
+(function loadSat(){
+  satCtx.filter = 'saturate(1.35) contrast(1.08) brightness(1.04)';
+  const z = 16, x0 = TILE_X0*2, y0 = TILE_Y0*2, n = 8;
+  for (let dx = 0; dx < n; dx++) for (let dy = 0; dy < n; dy++){
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = (function(ddx, ddy){ return function(){
+      satCtx.drawImage(this, ddx*256, ddy*256, 256, 256);
+      satTex.needsUpdate = true;
+    };})(dx, dy);
+    img.src = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+(y0+dy)+'/'+(x0+dx);
+  }
+})();
 
 // ════════════════════════ WORLD BUILD ════════════════════════════════
 let terrain, drone, cone, footprintRing, blades = [], plannedPath, waypointDots;
@@ -289,7 +299,7 @@ function buildWorld(){
   // ── acacia trees (low-poly) scattered outside + inside the area ───
   const trunkMat = new THREE.MeshLambertMaterial({ color: 0x4a3520 });
   const rng = mulberry32(442);
-  for (let i = 0; i < 90; i++){
+  for (let i = 0; i < 150; i++){
     const x = (rng()-0.5) * TERRAIN_SIZE * 0.9, z = (rng()-0.5) * TERRAIN_SIZE * 0.9;
     const y = groundY(x, z), s = 5 + rng()*5;                      // 5–10 m trees
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.7, s, 6), trunkMat);
@@ -301,6 +311,17 @@ function buildWorld(){
     crown.castShadow = true; scene.add(crown);
   }
 
+  // rocky outcrops
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x9a948a });
+  for (let i = 0; i < 30; i++){
+    const x = (rng()-0.5)*TERRAIN_SIZE*0.85, z = (rng()-0.5)*TERRAIN_SIZE*0.85;
+    const sR = 4 + rng()*14;
+    const rk = new THREE.Mesh(new THREE.DodecahedronGeometry(sR, 0), rockMat);
+    rk.position.set(x, groundY(x,z) + sR*0.35, z);
+    rk.rotation.set(rng()*3, rng()*3, rng()*3);
+    rk.castShadow = true; scene.add(rk);
+  }
+
   // ── incident markers (6, pulsing halos, detectable) ───────────────
   const irng = mulberry32(99);
   for (let i = 0; i < 6; i++){
@@ -308,17 +329,23 @@ function buildWorld(){
     const z = AREA.z0 + 120 + irng() * (AREA.h - 240);
     const y = groundY(x, z);
     const g = new THREE.Group();
-    const core = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10),
-      new THREE.MeshLambertMaterial({ color: 0x5a0d0a, emissive: 0xff2e22, emissiveIntensity: 0.9 }));
-    core.position.y = 8; core.castShadow = true; g.add(core);
-    const halo = new THREE.Mesh(new THREE.RingGeometry(12, 16, 28),
-      new THREE.MeshBasicMaterial({ color: 0xff4a3a, transparent: true, opacity: 0.55,
+    const core = new THREE.Mesh(new THREE.SphereGeometry(10, 14, 12),
+      new THREE.MeshLambertMaterial({ color: 0x5a0d0a, emissive: 0xff2e22, emissiveIntensity: 1.4 }));
+    core.position.y = 11; core.castShadow = true; g.add(core);
+    const halo = new THREE.Mesh(new THREE.RingGeometry(17, 24, 32),
+      new THREE.MeshBasicMaterial({ color: 0xff4a3a, transparent: true, opacity: 0.6,
         side: THREE.DoubleSide, depthWrite: false }));
     halo.rotation.x = -Math.PI/2; halo.position.y = 1.5; g.add(halo);
+    // GTA-style vertical light beam
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(5, 7, 220, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.18,
+        blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false }));
+    beam.position.y = 110; g.add(beam);
     const label = textSprite('Incident ' + (i+1) + ' — illustrative', '#ffb3ad');
-    label.position.y = 34; g.add(label);
+    label.position.y = 245; label.scale.set(170, 32, 1); g.add(label);
+    g.userData = g.userData || {}; g.userData.beam = beam;
     g.position.set(x, y, z);
-    g.userData = { core, halo, label, detected: false, phase: irng()*6.28 };
+    Object.assign(g.userData, { core, halo, label, detected: false, phase: irng()*6.28 });
     scene.add(g); incidents.push(g);
   }
 
@@ -345,6 +372,7 @@ function buildWorld(){
       new THREE.MeshLambertMaterial({ color: 0x191c20 }));
     blade.position.set(ax*9, 1.5, az*9); drone.add(blade); blades.push(blade);
   });
+  drone.scale.set(1.6, 1.6, 1.6);
   scene.add(drone);
 
   // ── FOV cone: apex at gimbal, base on the ground; rebuilt as AGL varies ──
@@ -405,7 +433,7 @@ try {
     composer = new THREE.EffectComposer(renderer);
     composer.addPass(new THREE.RenderPass(scene, camera));
     const bloom = new THREE.UnrealBloomPass(
-      new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.7, 0.86);
+      new THREE.Vector2(innerWidth, innerHeight), 0.5, 0.75, 0.82);
     composer.addPass(bloom);
   }
 } catch(e){ composer = null; }
@@ -524,13 +552,16 @@ function animate(){
     const u = m.userData;
     const pul = 1 + 0.25 * Math.sin(now * 0.004 + u.phase);
     u.halo.scale.set(pul, pul, 1);
+    u.beam.material.opacity = (u.detected?0.26:0.14) + 0.07*Math.sin(now*0.003+u.phase);
     if (!u.detected){
       const ddx = m.position.x - dronePos.x, ddz = m.position.z - dronePos.z;
       if (ddx*ddx + ddz*ddz <= (SWATH/2)*(SWATH/2)){
         u.detected = true; detected++;
-        u.core.material.emissiveIntensity = 2.2;
+        u.core.material.emissiveIntensity = 2.6;
         u.halo.material.opacity = 0.95;
         u.halo.scale.set(1.8, 1.8, 1);
+        u.beam.material.color.set(0x3fff70);
+        u.beam.material.opacity = 0.26;
         u.label.material.map = textSprite('✔ DETECTED — Incident', '#7dff9b').material.map;
       }
     }
