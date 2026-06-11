@@ -10,6 +10,8 @@ The analysis is based on the Pennsylvania State University research paper "Predi
 
 **[Live Demo →](https://halkhoori2000.github.io/Wildlife-Conservation-Using-Drones/)**
 
+**[📄 Final Report (PDF)](docs/final-report.pdf)** · **[🎞 Final Presentation (PDF)](docs/final-presentation.pdf)**
+
 ---
 
 ## Use Cases
