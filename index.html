@@ -358,7 +358,7 @@
     <h3>① 3D Drone Patrol Simulation — Tsavo (illustrative)</h3>
     <p>A surveillance drone sweeps a high-risk zone in a lawnmower pattern. The yellow cone is the camera's field of view —
        its ground footprint uses the study's geometry (swath = 2·altitude·tan(FOV/2)). Green trail = ground actually covered.
-       Red markers = illustrative incident clusters near roads and water. <b>Drag</b> to orbit · <b>scroll</b> to zoom ·
+       Terrain: <b>real Tsavo satellite imagery</b> (Esri World Imagery). Red markers = illustrative incident clusters, not the actual study coordinates. <b>Drag</b> to orbit · <b>scroll</b> to zoom ·
        <b>WASD</b> to move · <b>Follow</b> rides behind the drone.</p>
     <div style="position:relative">
       <canvas id="simCanvas" style="width:100%;height:460px;border:1px solid var(--border);border-radius:6px;background:#0d1117"></canvas>
@@ -415,38 +415,44 @@
     const pos = geo.attributes.position;
     for (let i=0;i<pos.count;i++) pos.setY(i, groundY(pos.getX(i), pos.getZ(i)));
     geo.computeVertexNormals();
-    const tc=document.createElement('canvas'); tc.width=1024; tc.height=700;
+    const tc=document.createElement('canvas'); tc.width=1024; tc.height=1024;
     const tx=tc.getContext('2d');
-    const grad=tx.createLinearGradient(0,0,1024,700);
+    const grad=tx.createLinearGradient(0,0,1024,1024);
     grad.addColorStop(0,'#9a8b4f'); grad.addColorStop(0.5,'#7d9148'); grad.addColorStop(1,'#6b8542');
-    tx.fillStyle=grad; tx.fillRect(0,0,1024,700);
-    const trng=mulberry32(99);
-    for (let i=0;i<4200;i++){
-      const x=trng()*1024, y=trng()*700, r=2+trng()*9;
-      const shades=['rgba(120,140,70,0.20)','rgba(150,130,70,0.18)','rgba(90,110,55,0.20)','rgba(170,150,95,0.13)'];
-      tx.fillStyle=shades[Math.floor(trng()*4)];
-      tx.beginPath(); tx.arc(x,y,r,0,7); tx.fill();
-    }
+    tx.fillStyle=grad; tx.fillRect(0,0,1024,1024);
     const terrTex=new THREE.CanvasTexture(tc);
+    terrTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    // real Tsavo East satellite imagery (Esri World Imagery, z15 tiles, ~4.9 km square)
+    (function loadSat(){
+      const z=15, x0=19894, y0=16648, n=4;
+      let loaded=0;
+      for (let dx=0;dx<n;dx++) for (let dy=0;dy<n;dy++){
+        const img=new Image();
+        img.crossOrigin='anonymous';
+        img.onload=function(){
+          tx.drawImage(img, dx*256, dy*256, 256, 256);
+          loaded++;
+          terrTex.needsUpdate=true;
+        };
+        img.src='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+(y0+dy)+'/'+(x0+dx);
+      }
+    })();
     const terrain=new THREE.Mesh(geo, new THREE.MeshLambertMaterial({map:terrTex}));
     terrain.receiveShadow=true;
     scene.add(terrain);
 
     // ── river (specular water) + dirt roads
-    function ribbon(pts, mat, w, lift){
-      const curve=new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0], groundY(p[0],p[1])+lift, p[1])));
-      const tube=new THREE.Mesh(new THREE.TubeGeometry(curve, 80, w, 6), mat);
-      tube.receiveShadow=true; scene.add(tube); return curve;
+    function curveOf(pts){
+      return new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0], groundY(p[0],p[1]), p[1])));
     }
-    const waterMat=new THREE.MeshPhongMaterial({color:0x2e6e8e, specular:0xbcd9ee, shininess:90, transparent:true, opacity:0.95});
-    const dirtMat=new THREE.MeshLambertMaterial({color:0x7a6443});
-    const river=ribbon([[105,-65],[60,-30],[20,5],[-40,35],[-95,68]], waterMat, 1.0, 0.25);
-    const roadA=ribbon([[-100,55],[-40,20],[40,-5],[100,-25]], dirtMat, 0.6, 0.18);
-    const roadB=ribbon([[-80,-65],[-30,-20],[30,40],[70,68]], dirtMat, 0.6, 0.18);
+    // invisible guide curves — used only to cluster the illustrative incident points
+    const river=curveOf([[105,-65],[60,-30],[20,5],[-40,35],[-95,68]]);
+    const roadA=curveOf([[-100,55],[-40,20],[40,-5],[100,-25]]);
+    const roadB=curveOf([[-80,-65],[-30,-20],[30,40],[70,68]]);
 
     // ── umbrella acacias + shrubs + rocks
     const trunkMat=new THREE.MeshLambertMaterial({color:0x4a3520});
-    for (let i=0;i<60;i++){
+    for (let i=0;i<16;i++){
       const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95;
       const y=groundY(x,z), s=0.8+rng()*1.3;
       const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.13*s,0.22*s,2.6*s,6), trunkMat);
@@ -462,13 +468,13 @@
       }
     }
     const shrubMat=new THREE.MeshLambertMaterial({color:0x55683a});
-    for (let i=0;i<90;i++){
+    for (let i=0;i<24;i++){
       const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95, s=0.25+rng()*0.5;
       const sh=new THREE.Mesh(new THREE.SphereGeometry(s,6,4), shrubMat);
       sh.scale.y=0.55; sh.position.set(x, groundY(x,z)+s*0.4, z); sh.castShadow=true; scene.add(sh);
     }
     const rockMat=new THREE.MeshLambertMaterial({color:0x8d8a80});
-    for (let i=0;i<28;i++){
+    for (let i=0;i<10;i++){
       const x=(rng()-0.5)*TW*0.9, z=(rng()-0.5)*TH*0.9, s=0.4+rng()*1.1;
       const rk=new THREE.Mesh(new THREE.DodecahedronGeometry(s,0), rockMat);
       rk.position.set(x, groundY(x,z)+s*0.4, z);
