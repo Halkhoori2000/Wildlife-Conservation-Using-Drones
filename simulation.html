@@ -72,7 +72,7 @@
   <h1>Drone Search Pattern — Tsavo National Park (illustrative)</h1>
   <p>Lawnmower sweep of a 2 km × 1.5 km area at 120 m AGL · 60° FOV · 30% pass overlap.
      Terrain: real Tsavo satellite imagery (Esri World Imagery) over real elevation (AWS Terrain Tiles).
-     Incidents are illustrative. Drag to orbit · scroll to zoom · right-drag to pan.
+     Incidents, elephant herd, and village are illustrative. Drag to orbit · scroll to zoom · right-drag to pan.
      <a href="index.html">← back to project page</a></p>
 </div>
 
@@ -242,7 +242,7 @@ loadTiles(
 // ════════════════════════ WORLD BUILD ════════════════════════════════
 let terrain, drone, cone, footprintRing, blades = [], plannedPath, waypointDots;
 let trailLine, trailPositions, trailColors, covCtx, covTex, covMesh;
-let incidents = [], dust = [], dustGroup;
+let incidents = [], dust = [], dustGroup, herd = [], birds = [];
 const wayPts = [];
 
 function buildWorld(){
@@ -320,6 +320,75 @@ function buildWorld(){
     rk.position.set(x, groundY(x,z) + sR*0.35, z);
     rk.rotation.set(rng()*3, rng()*3, rng()*3);
     rk.castShadow = true; scene.add(rk);
+  }
+
+  // ── wildlife & village (illustrative additions, GTA-style life) ───
+  const eleMat = new THREE.MeshLambertMaterial({ color: 0x8f857c });
+  const tuskMat = new THREE.MeshLambertMaterial({ color: 0xe8e0cc });
+  function makeElephant(sc){
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8), eleMat);
+    body.scale.set(1.5, 1.05, 0.95); body.position.y = 2.2; body.castShadow = true; g.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.85, 9, 7), eleMat);
+    head.position.set(2.2, 2.7, 0); head.castShadow = true; g.add(head);
+    const trunkG = new THREE.Group();
+    for (let i = 0; i < 4; i++){
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.20-0.035*i, 0.17-0.035*i, 0.7, 7), eleMat);
+      seg.position.set(0, -0.35-i*0.62, 0.06*i);
+      trunkG.add(seg);
+    }
+    trunkG.position.set(2.95, 2.55, 0); g.add(trunkG); g.userData.trunk = trunkG;
+    [-1, 1].forEach(sd => {
+      const ear = new THREE.Mesh(new THREE.SphereGeometry(0.72, 7, 5), eleMat);
+      ear.scale.set(0.12, 1, 0.85); ear.position.set(2.05, 2.95, sd*0.85); ear.castShadow = true; g.add(ear);
+      const tusk = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.7, 6), tuskMat);
+      tusk.position.set(2.85, 2.05, sd*0.3); tusk.rotation.z = -1.1; g.add(tusk);
+      [-0.8, 0.85].forEach(lx => {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.31, 1.7, 7), eleMat);
+        leg.position.set(lx, 0.85, sd*0.55); leg.castShadow = true; g.add(leg);
+      });
+    });
+    g.scale.set(sc, sc, sc);
+    return g;
+  }
+  const herdAnchor = { x: -1350, z: 880 };
+  for (let i = 0; i < 8; i++){
+    const sc = i < 6 ? (1.1 + rng()*0.35) : 0.6;          // adults ~5 m long, 2 calves
+    const e = makeElephant(sc);
+    e.userData.heading = rng()*6.28;
+    e.userData.spd = 0.5 + rng()*0.5;
+    e.userData.ox = herdAnchor.x + (rng()-0.5)*220;
+    e.userData.oz = herdAnchor.z + (rng()-0.5)*180;
+    e.position.set(e.userData.ox, groundY(e.userData.ox, e.userData.oz), e.userData.oz);
+    scene.add(e); herd.push(e);
+  }
+  // village
+  const wallMat = new THREE.MeshLambertMaterial({ color: 0xc9b08a });
+  const roofMat = new THREE.MeshLambertMaterial({ color: 0x77452a });
+  for (let i = 0; i < 8; i++){
+    const hx = 1280 + (rng()-0.5)*260, hz = -1050 + (rng()-0.5)*220;
+    const hw = 10+rng()*6, hd = 8+rng()*5, hh = 5+rng()*2;
+    const hy = groundY(hx, hz);
+    const walls = new THREE.Mesh(new THREE.BoxGeometry(hw, hh, hd), wallMat);
+    walls.position.set(hx, hy+hh/2, hz); walls.rotation.y = rng()*Math.PI;
+    walls.castShadow = true; walls.receiveShadow = true; scene.add(walls);
+    const hr = new THREE.Mesh(new THREE.ConeGeometry(Math.max(hw,hd)*0.75, 4, 4), roofMat);
+    hr.position.set(hx, hy+hh+2, hz); hr.rotation.y = walls.rotation.y + Math.PI/4;
+    hr.castShadow = true; scene.add(hr);
+  }
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 9, 10),
+    new THREE.MeshLambertMaterial({ color: 0x6f7d8c }));
+  tank.position.set(1450, groundY(1450, -1050)+10, -1050); tank.castShadow = true; scene.add(tank);
+  // birds
+  for (let i = 0; i < 5; i++){
+    const b = new THREE.Group();
+    const wM = new THREE.MeshBasicMaterial({ color: 0x23262a, side: THREE.DoubleSide });
+    const w1 = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.2), wM); w1.position.x = -3;
+    const w2 = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.2), wM); w2.position.x = 3;
+    b.add(w1); b.add(w2);
+    b.userData = { w1, w2, a: rng()*6.28, r: 200+rng()*350, h: 90+rng()*120,
+                   cx: (rng()-0.5)*1600, cz: (rng()-0.5)*1200, sp: 0.05+rng()*0.05 };
+    scene.add(b); birds.push(b);
   }
 
   // ── incident markers (6, pulsing halos, detectable) ───────────────
@@ -546,6 +615,28 @@ function animate(){
     trailLine.geometry.attributes.position.needsUpdate = true;
     trailLine.geometry.attributes.color.needsUpdate = true;
   }
+
+  // ── elephants wander, birds circle ──────────────────────────────────
+  herd.forEach(e => {
+    const u = e.userData;
+    u.heading += (Math.random()-0.5)*0.5*dt;
+    const nx = e.position.x + Math.cos(u.heading)*u.spd*dt;
+    const nz = e.position.z + Math.sin(u.heading)*u.spd*dt;
+    const ddx = nx-u.ox, ddz = nz-u.oz;
+    if (ddx*ddx + ddz*ddz > 220*220){ u.heading = Math.atan2(u.oz-nz, u.ox-nx); }
+    else { e.position.x = nx; e.position.z = nz; }
+    e.position.y = groundY(e.position.x, e.position.z);
+    e.rotation.y = -u.heading;
+    if (u.trunk) u.trunk.rotation.x = Math.sin(now*0.0012 + u.ox)*0.18;
+  });
+  birds.forEach(b => {
+    const u = b.userData;
+    u.a += u.sp*dt*3;
+    b.position.set(u.cx + Math.cos(u.a)*u.r, u.h + Math.sin(u.a*2)*6, u.cz + Math.sin(u.a)*u.r);
+    b.rotation.y = -u.a;
+    const flap = Math.sin(now*0.012)*0.6;
+    u.w1.rotation.y = flap; u.w2.rotation.y = -flap;
+  });
 
   // ── incidents: pulse; detect when footprint covers them ────────────
   incidents.forEach(m => {
