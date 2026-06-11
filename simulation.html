@@ -84,8 +84,14 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
 <script>
+// overlay failsafe: clears no matter what happens later
+setTimeout(function(){
+  var l = document.getElementById('loading');
+  if (l && l.parentNode) l.remove();
+}, 7000);
 (function(){
 'use strict';
+try {
 
 /* ════════════════════════════════════════════════════════════════════
    FLAT-TERRAIN COVERAGE DEMO — no ML, no raycasting, 60 fps.
@@ -178,9 +184,11 @@ satTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
       if (++loaded >= 16){ const l = document.getElementById('loading');
         if (l){ l.style.opacity = 0; setTimeout(()=>{ if (l.parentNode) l.remove(); }, 700); } }
     };})(dx, dy);
+    img.onerror = function(){
+      if (++loaded >= 16){ const l = document.getElementById('loading'); if (l && l.parentNode) l.remove(); }
+    };
     img.src = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+(y0+dy)+'/'+(x0+dx);
   }
-  setTimeout(function(){ const l = document.getElementById('loading'); if (l && l.parentNode) l.remove(); }, 6000);
 })();
 const terrain = new THREE.Mesh(
   new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE),
@@ -549,6 +557,12 @@ window.addEventListener('resize', function(){
   renderer.setSize(innerWidth, innerHeight);
 });
 
+} catch(err){
+  var l = document.getElementById('loading');
+  if (l) l.innerHTML = '⚠ Could not start the 3D simulation: ' + (err && err.message ? err.message : err) +
+    '<br>Try a hard refresh (Cmd/Ctrl+Shift+R).';
+  console.error(err);
+}
 })();
 </script>
 </body>
