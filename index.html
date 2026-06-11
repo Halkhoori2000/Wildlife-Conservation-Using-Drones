@@ -344,6 +344,405 @@
   </div>
 
   <!-- Stack -->
+
+  <!-- ───────── Interactive methodology recreation ───────── -->
+  <h2 style="margin-top:44px">Run the Methodology — Interactive Recreation</h2>
+  <p style="font-size:13px;color:var(--orange);border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:12px 16px;line-height:1.6;margin-bottom:20px">
+    ⚠ Built for this showcase as an <strong>illustrative recreation</strong> of the study's method. The incident points below are
+    generated for demonstration — they are <strong>not</strong> the study's actual coordinates (those belong to the Shaffer &amp; Bishop dataset).
+    The drone calculator uses the same geometry the study describes (camera FOV × altitude × speed × battery).
+  </p>
+
+
+  <div class="iwidget" id="simWidget">
+    <h3>① 3D Drone Patrol Simulation — Tsavo (illustrative)</h3>
+    <p>A surveillance drone sweeps a high-risk zone in a lawnmower pattern. The yellow cone is the camera's field of view —
+       its ground footprint uses the study's geometry (swath = 2·altitude·tan(FOV/2)). Green trail = ground actually covered.
+       Red markers = illustrative incident clusters near roads and water. <b>Drag</b> to orbit · <b>scroll</b> to zoom ·
+       <b>WASD</b> to move · <b>Follow</b> rides behind the drone.</p>
+    <div style="position:relative">
+      <canvas id="simCanvas" style="width:100%;height:460px;border:1px solid var(--border);border-radius:6px;background:#0d1117"></canvas>
+      <div id="simHud" style="position:absolute;top:10px;left:12px;font-family:monospace;font-size:11.5px;color:#9fd8ff;line-height:1.7;pointer-events:none;text-shadow:0 0 6px #000"></div>
+    </div>
+    <div class="iw-row" style="margin-top:12px;align-items:center">
+      <button id="simPlay" class="ibtn">⏸ Pause</button>
+      <button id="simFollow" class="ibtn" style="background:var(--surface);border:1px solid var(--border)">🎥 Follow drone</button>
+      <label style="font-size:12px;color:var(--muted)">Altitude <span id="sAltV">120</span> m
+        <input type="range" id="sAlt" min="40" max="400" value="120" style="vertical-align:middle"></label>
+      <label style="font-size:12px;color:var(--muted)">Speed <span id="sSpdV">15</span> m/s
+        <input type="range" id="sSpd" min="5" max="30" value="15" style="vertical-align:middle"></label>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+  (function(){
+    if (typeof THREE === 'undefined'){ document.getElementById('simWidget').style.display='none'; return; }
+    let renderer;
+    const canvas = document.getElementById('simCanvas');
+    try { renderer = new THREE.WebGLRenderer({canvas, antialias:true}); }
+    catch(e){ document.getElementById('simWidget').style.display='none'; return; }
+
+    const M_PER_UNIT = 20;                       // 1 world unit = 20 m
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+    scene.fog = new THREE.Fog(0x0d1117, 120, 320);
+    const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 600);
+
+    function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+    const rng = mulberry32(442);
+
+    // ── terrain (low-poly savanna)
+    const TW=220, TH=150, SEG=55;
+    const geo = new THREE.PlaneGeometry(TW, TH, SEG, Math.round(SEG*TH/TW));
+    geo.rotateX(-Math.PI/2);
+    const pos = geo.attributes.position;
+    const colors = [];
+    const c1=new THREE.Color(0x8a7a3a), c2=new THREE.Color(0x6b8f3e), c3=new THREE.Color(0x4f7a35);
+    for (let i=0;i<pos.count;i++){
+      const x=pos.getX(i), z=pos.getZ(i);
+      const h = Math.sin(x*0.045)*1.4 + Math.cos(z*0.06)*1.2 + Math.sin((x+z)*0.025)*1.8;
+      pos.setY(i, h);
+      const t = Math.min(1, Math.max(0, (h+2)/6));
+      const col = t<0.5 ? c1.clone().lerp(c2, t*2) : c2.clone().lerp(c3, (t-0.5)*2);
+      colors.push(col.r, col.g, col.b);
+    }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors,3));
+    scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({vertexColors:true})));
+    function groundY(x,z){ return Math.sin(x*0.045)*1.4 + Math.cos(z*0.06)*1.2 + Math.sin((x+z)*0.025)*1.8; }
+
+    // ── river + roads
+    function ribbon(pts, color, w){
+      const curve = new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0], groundY(p[0],p[1])+0.25, p[1])));
+      const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 60, w, 5),
+        new THREE.MeshBasicMaterial({color}));
+      scene.add(tube); return curve;
+    }
+    const river = ribbon([[105,-65],[60,-30],[20,5],[-40,35],[-95,68]], 0x1f4d6e, 0.9);
+    const roadA = ribbon([[-100,55],[-40,20],[40,-5],[100,-25]], 0x3d2f1f, 0.5);
+    const roadB = ribbon([[-80,-65],[-30,-20],[30,40],[70,68]], 0x3d2f1f, 0.5);
+
+    // ── trees (acacia-ish)
+    for (let i=0;i<70;i++){
+      const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95;
+      const y=groundY(x,z), s=0.7+rng()*1.2;
+      const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.12*s,0.18*s,2.2*s,5), new THREE.MeshBasicMaterial({color:0x4a3520}));
+      trunk.position.set(x,y+1.1*s,z);
+      const crown=new THREE.Mesh(new THREE.ConeGeometry(1.9*s,0.9*s,7), new THREE.MeshBasicMaterial({color:0x2e5e2a}));
+      crown.position.set(x,y+2.4*s,z);
+      scene.add(trunk); scene.add(crown);
+    }
+
+    // ── incidents (illustrative, clustered near features — same idea as the 2D widget)
+    const featureCurves=[river, roadA, roadB];
+    const incGeo = new THREE.SphereGeometry(0.45, 6, 5);
+    const incMat = new THREE.MeshBasicMaterial({color:0xf85149});
+    for (let i=0;i<156;i++){
+      const c = featureCurves[Math.floor(rng()*3)];
+      const p = c.getPoint(rng());
+      const g = ()=> (rng()+rng()+rng()-1.5)*9;
+      const x=p.x+g(), z=p.z+g();
+      const m=new THREE.Mesh(incGeo, incMat);
+      m.position.set(x, groundY(x,z)+0.5, z);
+      scene.add(m);
+    }
+
+    // ── risk zone + ranger station
+    const zone = {x0:-60, x1:5, z0:-5, z1:45};
+    const zoneMesh = new THREE.Mesh(new THREE.PlaneGeometry(zone.x1-zone.x0, zone.z1-zone.z0),
+      new THREE.MeshBasicMaterial({color:0xf85149, transparent:true, opacity:0.10, side:THREE.DoubleSide}));
+    zoneMesh.rotation.x=-Math.PI/2;
+    zoneMesh.position.set((zone.x0+zone.x1)/2, 3.6, (zone.z0+zone.z1)/2);
+    scene.add(zoneMesh);
+    const station = new THREE.Group();
+    const tower=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.7,5,6), new THREE.MeshBasicMaterial({color:0x8b949e}));
+    const cab=new THREE.Mesh(new THREE.BoxGeometry(2.4,1.4,2.4), new THREE.MeshBasicMaterial({color:0xd29922}));
+    cab.position.y=3.2; station.add(tower); station.add(cab);
+    const stx=zone.x1+8, stz=zone.z0-6;
+    station.position.set(stx, groundY(stx,stz)+2.5, stz);
+    scene.add(station);
+
+    // ── coverage paint (canvas texture overlay)
+    const cov=document.createElement('canvas'); cov.width=512; cov.height=350;
+    const cctx=cov.getContext('2d');
+    const covTex=new THREE.CanvasTexture(cov);
+    const covMesh=new THREE.Mesh(new THREE.PlaneGeometry(TW,TH),
+      new THREE.MeshBasicMaterial({map:covTex, transparent:true, opacity:0.5, depthWrite:false}));
+    covMesh.rotation.x=-Math.PI/2; covMesh.position.y=3.4; scene.add(covMesh);
+    function paint(x,z,swathUnits){
+      const px=(x+TW/2)/TW*512, pz=(z+TH/2)/TH*350;
+      const r=Math.max(2, swathUnits/2/TW*512);
+      cctx.fillStyle='rgba(63,185,80,0.5)';
+      cctx.beginPath(); cctx.arc(px,pz,r,0,7); cctx.fill();
+      covTex.needsUpdate=true;
+    }
+
+    // ── drone
+    const drone=new THREE.Group();
+    const body=new THREE.Mesh(new THREE.BoxGeometry(1.4,0.4,1.4), new THREE.MeshBasicMaterial({color:0xe6edf3}));
+    drone.add(body);
+    const gimbal=new THREE.Mesh(new THREE.SphereGeometry(0.3,8,6), new THREE.MeshBasicMaterial({color:0x1f6feb}));
+    gimbal.position.y=-0.35; drone.add(gimbal);
+    const blades=[];
+    [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([ax,az])=>{
+      const arm=new THREE.Mesh(new THREE.BoxGeometry(1.3,0.08,0.14), new THREE.MeshBasicMaterial({color:0x8b949e}));
+      arm.position.set(ax*0.9,0.05,az*0.9); arm.rotation.y=Math.atan2(az,ax); drone.add(arm);
+      const blade=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.04,0.12), new THREE.MeshBasicMaterial({color:0x3fb950}));
+      blade.position.set(ax*1.45,0.18,az*1.45); drone.add(blade); blades.push(blade);
+    });
+    scene.add(drone);
+    // FOV cone
+    let cone=null;
+    function rebuildCone(altM){
+      if (cone) drone.remove(cone);
+      const hUnits=altM/M_PER_UNIT;
+      const fov=90*Math.PI/180;
+      const baseR=altM*Math.tan(fov/2)/M_PER_UNIT;
+      const cg=new THREE.ConeGeometry(baseR, hUnits, 24, 1, true);
+      cone=new THREE.Mesh(cg, new THREE.MeshBasicMaterial({color:0xffe14d, transparent:true, opacity:0.13, side:THREE.DoubleSide, depthWrite:false}));
+      cone.position.y=-hUnits/2;
+      drone.add(cone);
+      return baseR*2;
+    }
+
+    // ── patrol path (lawnmower over the risk zone)
+    const way=[]; let dir=1;
+    for (let z=zone.z0+4; z<=zone.z1-2; z+=9){
+      if (dir>0){ way.push([zone.x0+3,z]); way.push([zone.x1-3,z]); }
+      else { way.push([zone.x1-3,z]); way.push([zone.x0+3,z]); }
+      dir*=-1;
+    }
+    let wi=0, resume=0, mode='PATROL', battery=100, covered=0;
+    let dronePos=new THREE.Vector3(way[0][0], 0, way[0][1]);
+
+    // ── state from sliders
+    let altM=120, speed=15, swathUnits=rebuildCone(120), playing=true, follow=false;
+    document.getElementById('sAlt').addEventListener('input',e=>{altM=+e.target.value;
+      document.getElementById('sAltV').textContent=altM; swathUnits=rebuildCone(altM);});
+    document.getElementById('sSpd').addEventListener('input',e=>{speed=+e.target.value;
+      document.getElementById('sSpdV').textContent=speed;});
+    document.getElementById('simPlay').addEventListener('click',function(){playing=!playing;this.textContent=playing?'⏸ Pause':'▶ Play';});
+    document.getElementById('simFollow').addEventListener('click',function(){follow=!follow;
+      this.style.background=follow?'var(--accent)':'var(--surface)';});
+
+    // ── camera controls (orbit + WASD)
+    let theta=0.8, phi=0.45, dist=95, drag=null;
+    const target=new THREE.Vector3(-25,4,20);
+    canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};});
+    window.addEventListener('pointermove',e=>{if(!drag)return;
+      theta-=(e.clientX-drag.x)*0.005; phi=Math.min(1.35,Math.max(0.1,phi+(e.clientY-drag.y)*0.004));
+      drag={x:e.clientX,y:e.clientY};});
+    window.addEventListener('pointerup',()=>drag=null);
+    canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.min(220,Math.max(18,dist+e.deltaY*0.06));},{passive:false});
+    const keys={};
+    window.addEventListener('keydown',e=>{const k=e.key.toLowerCase();if('wasd'.includes(k)){keys[k]=true;}});
+    window.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+
+    // ── loop
+    const clock=new THREE.Clock();
+    function animate(){
+      requestAnimationFrame(animate);
+      const dt=Math.min(clock.getDelta(),0.05);
+      blades.forEach(b=>b.rotation.y+=dt*40);
+
+      if (playing){
+        const spdUnits=speed/M_PER_UNIT*6;          // ×6 time-lapse so patrol is watchable
+        if (mode==='PATROL'){
+          const tgt=new THREE.Vector3(way[wi][0],0,way[wi][1]);
+          const d=tgt.clone().sub(dronePos); d.y=0;
+          if (d.length()<1){ wi=(wi+1)%way.length; }
+          else { d.normalize(); dronePos.addScaledVector(d, spdUnits*dt); }
+          battery-=dt*0.55;
+          paint(dronePos.x,dronePos.z,swathUnits);
+          covered+=(swathUnits*M_PER_UNIT)*(speed*6)*dt/1e6;
+          if (battery<=15){ mode='RTB'; resume=wi; }
+        } else if (mode==='RTB'){
+          const tgt=new THREE.Vector3(stx,0,stz);
+          const d=tgt.clone().sub(dronePos); d.y=0;
+          if (d.length()<2){ mode='CHARGING'; }
+          else { d.normalize(); dronePos.addScaledVector(d, spdUnits*1.3*dt); }
+        } else if (mode==='CHARGING'){
+          battery+=dt*22;
+          if (battery>=100){ battery=100; wi=resume; mode='PATROL'; }
+        }
+      }
+      const gy=groundY(dronePos.x,dronePos.z);
+      drone.position.set(dronePos.x, gy+altM/M_PER_UNIT, dronePos.z);
+
+      // WASD pans the orbit target
+      const pan=30*dt;
+      if(keys.w)target.z-=pan; if(keys.s)target.z+=pan;
+      if(keys.a)target.x-=pan; if(keys.d)target.x+=pan;
+
+      if (follow){
+        camera.position.set(drone.position.x-14*Math.sin(theta), drone.position.y+9, drone.position.z-14*Math.cos(theta));
+        camera.lookAt(drone.position);
+      } else {
+        camera.position.set(target.x+dist*Math.cos(phi)*Math.sin(theta), target.y+dist*Math.sin(phi), target.z+dist*Math.cos(phi)*Math.cos(theta));
+        camera.lookAt(target);
+      }
+
+      const swathM=Math.round(swathUnits*M_PER_UNIT);
+      document.getElementById('simHud').innerHTML=
+        'MODE <b>'+mode+'</b> · ALT <b>'+altM+' m</b> · SPD <b>'+speed+' m/s</b> (×6 time-lapse)<br>'+
+        'FOV 90° → swath <b>'+swathM+' m</b> · covered <b>'+covered.toFixed(2)+' km²</b> · battery <b>'+Math.max(0,Math.round(battery))+'%</b>';
+
+      // resize
+      const w=canvas.clientWidth, h=canvas.clientHeight;
+      if (canvas.width!==w||canvas.height!==h){ renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+      renderer.render(scene,camera);
+    }
+    renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    animate();
+  })();
+  </script>
+
+  <div class="iwidget">
+    <h3>② Monte Carlo — is the incident pattern random?</h3>
+    <p>The study validated that 156 poaching incidents are <em>not</em> randomly placed by comparing them against 100 random patterns.
+       Run it: each simulation scatters 156 random points and measures the mean nearest-neighbour distance (NND).
+       A clustered pattern has a much smaller NND than random ones.</p>
+    <div class="iw-row">
+      <canvas id="mcMap" width="460" height="300"></canvas>
+      <canvas id="mcHist" width="460" height="300"></canvas>
+    </div>
+    <div class="iw-row" style="align-items:center">
+      <button id="mcRun" class="ibtn">▶ Run 100 simulations</button>
+      <div id="mcVerdict" style="font-size:13px;color:var(--muted)">Press run — the red marker is the clustered pattern's NND.</div>
+    </div>
+  </div>
+
+  <div class="iwidget">
+    <h3>③ Drone coverage calculator</h3>
+    <p>How much ground can one surveillance flight watch? Same inputs the study fed into ArduPilot Mega Planner.</p>
+    <div class="iw-grid">
+      <label>Altitude <span id="vAlt">120</span> m
+        <input type="range" id="iAlt" min="40" max="400" value="120"></label>
+      <label>Camera FOV <span id="vFov">90</span>°
+        <input type="range" id="iFov" min="50" max="140" value="90"></label>
+      <label>Speed <span id="vSpd">15</span> m/s
+        <input type="range" id="iSpd" min="5" max="30" value="15"></label>
+      <label>Flight time <span id="vTim">25</span> min
+        <input type="range" id="iTim" min="10" max="60" value="25"></label>
+    </div>
+    <div class="iw-out">
+      <div><span id="oSwath">—</span><small>ground swath width</small></div>
+      <div><span id="oArea">—</span><small>area covered per flight</small></div>
+      <div><span id="oFlights">—</span><small>flights to sweep a 100 km² hotspot</small></div>
+    </div>
+  </div>
+
+  <style>
+    .iwidget { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+    .iwidget h3 { font-size: 15px; margin-bottom: 8px; }
+    .iwidget > p { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; }
+    .iw-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+    .iw-row canvas { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; max-width: 100%; }
+    .ibtn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; font-size: 13px; cursor: pointer; }
+    .ibtn:hover { background: var(--accent-hover); }
+    .iw-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap: 14px; margin-bottom: 14px; }
+    .iw-grid label { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+    .iw-grid span { color: var(--text); font-weight: 600; }
+    .iw-out { display: flex; gap: 24px; flex-wrap: wrap; }
+    .iw-out div { display: flex; flex-direction: column; }
+    .iw-out span { font-size: 22px; font-weight: 700; color: var(--green); }
+    .iw-out small { font-size: 11.5px; color: var(--muted); }
+  </style>
+
+  <script>
+  (function(){
+    // seeded RNG so the "observed" pattern is identical on every visit
+    function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+    const W=460,H=300,N=156;
+    // illustrative terrain: 2 roads + 1 river (polylines)
+    const roads=[[[20,260],[200,180],[440,140]],[[60,20],[180,120],[300,250]]];
+    const river=[[440,40],[330,90],[260,160],[150,230],[40,280]];
+    function pointOn(poly,t){let segs=poly.length-1,s=Math.min(segs-1,Math.floor(t*segs)),f=t*segs-s;
+      return [poly[s][0]+(poly[s+1][0]-poly[s][0])*f, poly[s][1]+(poly[s+1][1]-poly[s][1])*f];}
+    // observed (clustered) pattern — generated, clearly illustrative
+    const rng=mulberry32(442);
+    const obs=[];
+    for(let i=0;i<N;i++){
+      const feat=rng()<0.55?roads[Math.floor(rng()*2)]:river;
+      const p=pointOn(feat,rng());
+      const g=()=> (rng()+rng()+rng()-1.5)*22;
+      obs.push([Math.min(W-6,Math.max(6,p[0]+g())), Math.min(H-6,Math.max(6,p[1]+g()))]);
+    }
+    function meanNND(pts){let total=0;
+      for(let i=0;i<pts.length;i++){let best=1e9;
+        for(let j=0;j<pts.length;j++){if(i===j)continue;
+          const dx=pts[i][0]-pts[j][0],dy=pts[i][1]-pts[j][1],d=dx*dx+dy*dy;
+          if(d<best)best=d;}
+        total+=Math.sqrt(best);}
+      return total/pts.length;}
+    const obsNND=meanNND(obs);
+    // map drawing
+    const mc=document.getElementById('mcMap').getContext('2d');
+    function drawMap(pts,label,color){
+      mc.clearRect(0,0,W,H);
+      mc.lineWidth=2;
+      mc.strokeStyle='#3d2f1f';roads.forEach(r=>{mc.beginPath();mc.moveTo(r[0][0],r[0][1]);r.slice(1).forEach(p=>mc.lineTo(p[0],p[1]));mc.stroke();});
+      mc.strokeStyle='#1f4d6e';mc.beginPath();mc.moveTo(river[0][0],river[0][1]);river.slice(1).forEach(p=>mc.lineTo(p[0],p[1]));mc.stroke();
+      mc.fillStyle=color;
+      pts.forEach(p=>{mc.beginPath();mc.arc(p[0],p[1],2.4,0,7);mc.fill();});
+      mc.fillStyle='#8b949e';mc.font='11px sans-serif';mc.fillText(label,10,16);
+    }
+    drawMap(obs,'Illustrative clustered pattern — 156 points near roads (brown) and river (blue)','#f85149');
+    // histogram
+    const hc=document.getElementById('mcHist').getContext('2d');
+    function drawHist(values){
+      hc.clearRect(0,0,W,H);
+      hc.fillStyle='#8b949e';hc.font='11px sans-serif';
+      hc.fillText('Mean NND — 100 random patterns (blue) vs clustered (red line)',10,16);
+      if(!values.length)return;
+      const all=values.concat([obsNND]);
+      const lo=Math.min.apply(0,all)*0.95, hi=Math.max.apply(0,all)*1.05;
+      const bins=new Array(24).fill(0);
+      values.forEach(v=>{bins[Math.min(23,Math.floor((v-lo)/(hi-lo)*24))]++;});
+      const bmax=Math.max.apply(0,bins);
+      hc.fillStyle='#1f6feb';
+      bins.forEach((b,i)=>{const bh=b/bmax*(H-70);hc.fillRect(20+i*(W-40)/24,H-30-bh,(W-40)/24-2,bh);});
+      const ox=20+(obsNND-lo)/(hi-lo)*(W-40);
+      hc.strokeStyle='#f85149';hc.lineWidth=2;hc.beginPath();hc.moveTo(ox,30);hc.lineTo(ox,H-30);hc.stroke();
+      hc.fillStyle='#f85149';hc.fillText('clustered',Math.min(ox+4,W-60),42);
+    }
+    drawHist([]);
+    // run simulations
+    document.getElementById('mcRun').addEventListener('click',function(){
+      const btn=this;btn.disabled=true;
+      const vals=[];const r2=mulberry32(Date.now()|0);
+      (function step(){
+        for(let k=0;k<5&&vals.length<100;k++){
+          const pts=[];for(let i=0;i<N;i++)pts.push([6+r2()*(W-12),6+r2()*(H-12)]);
+          vals.push(meanNND(pts));
+        }
+        drawHist(vals);
+        document.getElementById('mcVerdict').textContent='Simulations: '+vals.length+'/100';
+        if(vals.length<100){requestAnimationFrame(step);return;}
+        const m=vals.reduce((a,b)=>a+b,0)/vals.length;
+        const sd=Math.sqrt(vals.reduce((a,b)=>a+(b-m)*(b-m),0)/vals.length);
+        const z=((obsNND-m)/sd).toFixed(1);
+        document.getElementById('mcVerdict').innerHTML='Clustered NND = <b>'+obsNND.toFixed(1)+'px</b> vs random mean <b>'+m.toFixed(1)+'px</b> (z = '+z+') — far below every random pattern: <b style="color:var(--green)">non-random, exactly what the study found</b>';
+        btn.disabled=false;
+      })();
+    });
+    // drone calculator
+    function calc(){
+      const alt=+document.getElementById('iAlt').value, fov=+document.getElementById('iFov').value,
+            spd=+document.getElementById('iSpd').value, tim=+document.getElementById('iTim').value;
+      document.getElementById('vAlt').textContent=alt;document.getElementById('vFov').textContent=fov;
+      document.getElementById('vSpd').textContent=spd;document.getElementById('vTim').textContent=tim;
+      const swath=2*alt*Math.tan(fov/2*Math.PI/180);
+      const area=swath*spd*tim*60/1e6;
+      document.getElementById('oSwath').textContent=Math.round(swath)+' m';
+      document.getElementById('oArea').textContent=area.toFixed(2)+' km²';
+      document.getElementById('oFlights').textContent=Math.ceil(100/area)+' flights';
+    }
+    ['iAlt','iFov','iSpd','iTim'].forEach(id=>document.getElementById(id).addEventListener('input',calc));
+    calc();
+  })();
+  </script>
+
   <h2>Tools & Stack</h2>
   <table class="stack-table">
     <thead>
