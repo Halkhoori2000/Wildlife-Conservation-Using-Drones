@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drone Search Simulation — Tsavo National Park</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#0d1117;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  canvas { display:block; }
+
+  .panel { position:absolute; background:rgba(13,17,23,0.78); border:1px solid #30363d;
+    border-radius:8px; color:#e6edf3; padding:12px 14px; font-size:12.5px;
+    backdrop-filter:blur(6px); }
+
+  #hud { top:14px; left:14px; line-height:1.9; font-family:'SF Mono',Menlo,monospace; }
+  #hud b { color:#58a6ff; }
+  #hud .cov { color:#3fb950; font-weight:700; }
+
+  #controls { top:14px; right:14px; line-height:2.0; }
+  #controls label { display:flex; align-items:center; gap:8px; cursor:pointer; }
+  #controls input[type=range] { width:110px; }
+  #controls .ttl { font-weight:600; font-size:11px; text-transform:uppercase;
+    letter-spacing:0.5px; color:#8b949e; margin-bottom:4px; }
+
+  #legend { bottom:14px; right:14px; line-height:1.9; }
+  .key { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:8px; vertical-align:-1px; }
+
+  #title { bottom:14px; left:14px; max-width:520px; line-height:1.55; }
+  #title h1 { font-size:14px; margin-bottom:3px; }
+  #title p { font-size:11px; color:#8b949e; }
+  #title a { color:#58a6ff; text-decoration:none; }
+
+  #loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:14px; color:#8b949e; background:#0d1117; z-index:10;
+    transition:opacity 0.6s; font-size:13px; }
+  .spin { width:34px; height:34px; border:3px solid #30363d; border-top-color:#58a6ff;
+    border-radius:50%; animation:sp 0.9s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="loading"><div class="spin"></div>Loading Tsavo terrain (satellite imagery + elevation)…</div>
+
+<div id="hud" class="panel">
+  MODE <b id="hMode">SEARCH</b><br>
+  ALT (AGL) <b id="hAlt">120 m</b> · SPEED <b id="hSpd">10 m/s</b><br>
+  COVERAGE <span class="cov" id="hCov">0.0%</span> of search area<br>
+  DETECTED <b id="hDet">0 / 6</b> incidents
+</div>
+
+<div id="controls" class="panel">
+  <div class="ttl">Overlays</div>
+  <label><input type="checkbox" id="tTrail" checked> Green coverage trail</label>
+  <label><input type="checkbox" id="tCone" checked> Camera FOV cone</label>
+  <label><input type="checkbox" id="tMark" checked> Incident markers</label>
+  <label><input type="checkbox" id="tPath" checked> Planned path</label>
+  <div class="ttl" style="margin-top:8px">Time-lapse ×<span id="vTime">8</span></div>
+  <input type="range" id="tTime" min="1" max="20" value="8">
+</div>
+
+<div id="legend" class="panel">
+  <span class="key" style="background:#ffe14d"></span>Camera FOV (60°)<br>
+  <span class="key" style="background:#3fb950"></span>Covered ground<br>
+  <span class="key" style="background:#f85149"></span>Incident (illustrative)<br>
+  <span class="key" style="background:#ffffff;opacity:0.7"></span>Planned lawnmower path
+</div>
+
+<div id="title" class="panel">
+  <h1>Drone Search Pattern — Tsavo National Park (illustrative)</h1>
+  <p>Lawnmower sweep of a 2 km × 1.5 km area at 120 m AGL · 60° FOV · 30% pass overlap.
+     Terrain: real Tsavo satellite imagery (Esri World Imagery) over real elevation (AWS Terrain Tiles).
+     Incidents are illustrative. Drag to orbit · scroll to zoom · right-drag to pan.
+     <a href="index.html">← back to project page</a></p>
+</div>
+
+<!-- Three.js r128 + add-ons (UMD builds attach to the THREE namespace) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+<script>
+(function(){
+'use strict';
+
+/* ════════════════════════════════════════════════════════════════════
+   UNITS: 1 world unit = 1 metre.
+   The terrain is a ~4.9 km square of real Tsavo East, Kenya:
+   16 Esri World Imagery tiles (z15) for colour, 16 AWS terrarium tiles
+   for elevation (decoded R*256 + G + B/256 − 32768 → metres).
+   ════════════════════════════════════════════════════════════════════ */
+
+const TILE_Z = 15, TILE_X0 = 19894, TILE_Y0 = 16648, TILES = 4;
+const TERRAIN_SIZE = 4892;                  // metres covered by the 4×4 tile block at z15 near the equator
+const HALF = TERRAIN_SIZE / 2;
+
+// Search area (centred): 2 km × 1.5 km
+const AREA = { x0:-1000, z0:-750, w:2000, h:1500 };
+
+// Flight parameters (per spec)
+const ALT_AGL   = 120;                      // m above ground level
+const SPEED     = 10;                       // m/s true airspeed
+const FOV_DEG   = 60;
+const SWATH     = 2 * ALT_AGL * Math.tan(FOV_DEG/2 * Math.PI/180);   // ≈ 138.6 m
+const PASS_GAP  = SWATH * 0.7;              // 30% overlap between adjacent passes
+
+// ── renderer ─────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+
+// warm late-afternoon sky: vertical gradient on a canvas, used as background
+(function sky(){
+  const c = document.createElement('canvas'); c.width = 2; c.height = 512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0.00, '#6e9bd1');
+  grad.addColorStop(0.55, '#cfd9e8');
+  grad.addColorStop(0.80, '#f2d9b0');      // warm horizon band
+  grad.addColorStop(1.00, '#e8c89a');
+  g.fillStyle = grad; g.fillRect(0, 0, 2, 512);
+  const t = new THREE.CanvasTexture(c);
+  scene.background = t;
+})();
+scene.fog = new THREE.Fog(0xe3d2b4, 2400, 7800);          // distant warm haze
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 1, 20000);
+camera.position.set(-1750, 950, 1750);
+
+// ── lights: low warm sun for long shadows ────────────────────────────
+const sun = new THREE.DirectionalLight(0xffd9a8, 1.35);
+sun.position.set(-2200, 900, -1400);                       // late afternoon, low in the west
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -1400; sun.shadow.camera.right = 1400;
+sun.shadow.camera.top  =  1400; sun.shadow.camera.bottom = -1400;
+sun.shadow.camera.near = 100;   sun.shadow.camera.far = 6000;
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xbfd0e8, 0x9a7e55, 0.5));
+
+// ── orbit controls ───────────────────────────────────────────────────
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 60, 0);
+controls.maxPolarAngle = 1.52;
+controls.minDistance = 60;
+controls.maxDistance = 6000;
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+
+// ── elevation: real DEM with bilinear sampling ───────────────────────
+let HM = null, hMean = 0;
+function groundY(x, z){
+  if (!HM) return 0;
+  const u = Math.min(1023, Math.max(0, (x + HALF) / TERRAIN_SIZE * 1023));
+  const v = Math.min(1023, Math.max(0, (z + HALF) / TERRAIN_SIZE * 1023));
+  const x0 = u|0, y0 = v|0, fx = u - x0, fy = v - y0;
+  const x1 = Math.min(1023, x0+1), y1 = Math.min(1023, y0+1);
+  const h = (HM[y0*1024+x0]*(1-fx) + HM[y0*1024+x1]*fx) * (1-fy)
+          + (HM[y1*1024+x0]*(1-fx) + HM[y1*1024+x1]*fx) * fy;
+  return (h - hMean) * 1.5;                 // gentle vertical emphasis so relief reads at this scale
+}
+
+// satellite imagery canvas (fallback: flat savanna tint until tiles arrive)
+const satCanvas = document.createElement('canvas'); satCanvas.width = satCanvas.height = 1024;
+const satCtx = satCanvas.getContext('2d');
+satCtx.fillStyle = '#8a8350'; satCtx.fillRect(0,0,1024,1024);
+const satTex = new THREE.CanvasTexture(satCanvas);
+satTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+function loadTiles(urlFn, ctx, onDone){
+  let loaded = 0, finished = false;
+  function finish(ok){ if (!finished){ finished = true; onDone(ok); } }
+  for (let dx = 0; dx < TILES; dx++) for (let dy = 0; dy < TILES; dy++){
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function(){
+      ctx.drawImage(img, dx*256, dy*256, 256, 256);
+      satTex.needsUpdate = true;
+      if (++loaded === TILES*TILES) finish(true);
+    };
+    img.onerror = function(){ finish(false); };
+    img.src = urlFn(dx, dy);
+  }
+  setTimeout(function(){ finish(false); }, 8000);
+}
+
+// DEM canvas → height field
+const demCanvas = document.createElement('canvas'); demCanvas.width = demCanvas.height = 1024;
+const demCtx = demCanvas.getContext('2d');
+
+let booted = false;
+function bootIfReady(){ if (!booted){ booted = true; buildWorld(); } }
+
+loadTiles(
+  (dx,dy)=>'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/'+TILE_Z+'/'+(TILE_X0+dx)+'/'+(TILE_Y0+dy)+'.png',
+  demCtx,
+  function(ok){
+    if (ok){
+      try {
+        const d = demCtx.getImageData(0,0,1024,1024).data;
+        HM = new Float32Array(1024*1024); let sum = 0;
+        for (let i = 0; i < 1024*1024; i++){
+          const h = d[i*4]*256 + d[i*4+1] + d[i*4+2]/256 - 32768;
+          HM[i] = h; sum += h;
+        }
+        hMean = sum / (1024*1024);
+      } catch(e){ HM = null; }
+    }
+    bootIfReady();
+  });
+loadTiles(
+  (dx,dy)=>'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+TILE_Z+'/'+(TILE_Y0+dy)+'/'+(TILE_X0+dx),
+  satCtx,
+  function(){ /* imagery is cosmetic — world boots on DEM result */ });
+
+// ════════════════════════ WORLD BUILD ════════════════════════════════
+let terrain, drone, cone, footprintRing, blades = [], plannedPath, waypointDots;
+let trailLine, trailPositions, trailColors, covCtx, covTex, covMesh;
+let incidents = [], dust = [], dustGroup;
+const wayPts = [];
+
+function buildWorld(){
+
+  // ── terrain: 192×192 segments, displaced by the real DEM ──────────
+  const tg = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 192, 192);
+  tg.rotateX(-Math.PI/2);
+  const tp = tg.attributes.position;
+  for (let i = 0; i < tp.count; i++) tp.setY(i, groundY(tp.getX(i), tp.getZ(i)));
+  tg.computeVertexNormals();
+  terrain = new THREE.Mesh(tg, new THREE.MeshLambertMaterial({ map: satTex }));
+  terrain.receiveShadow = true;
+  scene.add(terrain);
+
+  // ── coverage paint: canvas texture on a terrain-hugging clone ─────
+  const cc = document.createElement('canvas'); cc.width = 1024; cc.height = 1024;
+  covCtx = cc.getContext('2d');
+  covTex = new THREE.CanvasTexture(cc);
+  covMesh = new THREE.Mesh(tg.clone(), new THREE.MeshBasicMaterial({
+    map: covTex, transparent: true, opacity: 0.5, depthWrite: false }));
+  covMesh.position.y = 1.2;
+  scene.add(covMesh);
+
+  // ── planned lawnmower path (semi-transparent white + waypoints) ───
+  let d = 1;
+  for (let z = AREA.z0 + SWATH/2; z <= AREA.z0 + AREA.h - SWATH/2 + 1; z += PASS_GAP){
+    const a = [AREA.x0 + 20, z], b = [AREA.x0 + AREA.w - 20, z];
+    if (d > 0){ wayPts.push(a, b); } else { wayPts.push(b, a); }
+    d *= -1;
+  }
+  const pathPts = wayPts.map(p => new THREE.Vector3(p[0], groundY(p[0], p[1]) + 14, p[1]));
+  plannedPath = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pathPts),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }));
+  scene.add(plannedPath);
+  waypointDots = new THREE.Group();
+  const wg = new THREE.SphereGeometry(5, 8, 6);
+  const wm = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+  pathPts.forEach(p => { const m = new THREE.Mesh(wg, wm); m.position.copy(p); waypointDots.add(m); });
+  scene.add(waypointDots);
+
+  // ── fading green ribbon (recent ~6 s of footprint centres) ────────
+  const MAXP = 360;
+  trailPositions = new Float32Array(MAXP * 3);
+  trailColors    = new Float32Array(MAXP * 3);
+  const tgeo = new THREE.BufferGeometry();
+  tgeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+  tgeo.setAttribute('color',    new THREE.BufferAttribute(trailColors, 3));
+  tgeo.setDrawRange(0, 0);
+  trailLine = new THREE.Line(tgeo, new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, blending: THREE.AdditiveBlending }));
+  scene.add(trailLine);
+
+  // ── acacia trees (low-poly) scattered outside + inside the area ───
+  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x4a3520 });
+  const rng = mulberry32(442);
+  for (let i = 0; i < 90; i++){
+    const x = (rng()-0.5) * TERRAIN_SIZE * 0.9, z = (rng()-0.5) * TERRAIN_SIZE * 0.9;
+    const y = groundY(x, z), s = 5 + rng()*5;                      // 5–10 m trees
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.7, s, 6), trunkMat);
+    trunk.position.set(x, y + s/2, z); trunk.castShadow = true; scene.add(trunk);
+    const crownMat = new THREE.MeshLambertMaterial({
+      color: new THREE.Color(0.2 + rng()*0.08, 0.38 + rng()*0.1, 0.12) });
+    const crown = new THREE.Mesh(new THREE.SphereGeometry(s*0.55, 7, 5), crownMat);
+    crown.scale.y = 0.3; crown.position.set(x, y + s*1.02, z);
+    crown.castShadow = true; scene.add(crown);
+  }
+
+  // ── incident markers (6, pulsing halos, detectable) ───────────────
+  const irng = mulberry32(99);
+  for (let i = 0; i < 6; i++){
+    const x = AREA.x0 + 120 + irng() * (AREA.w - 240);
+    const z = AREA.z0 + 120 + irng() * (AREA.h - 240);
+    const y = groundY(x, z);
+    const g = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.SphereGeometry(7, 12, 10),
+      new THREE.MeshLambertMaterial({ color: 0x5a0d0a, emissive: 0xff2e22, emissiveIntensity: 0.9 }));
+    core.position.y = 8; core.castShadow = true; g.add(core);
+    const halo = new THREE.Mesh(new THREE.RingGeometry(12, 16, 28),
+      new THREE.MeshBasicMaterial({ color: 0xff4a3a, transparent: true, opacity: 0.55,
+        side: THREE.DoubleSide, depthWrite: false }));
+    halo.rotation.x = -Math.PI/2; halo.position.y = 1.5; g.add(halo);
+    const label = textSprite('Incident ' + (i+1) + ' — illustrative', '#ffb3ad');
+    label.position.y = 34; g.add(label);
+    g.position.set(x, y, z);
+    g.userData = { core, halo, label, detected: false, phase: irng()*6.28 };
+    scene.add(g); incidents.push(g);
+  }
+
+  // ── drone (sleek quad) ─────────────────────────────────────────────
+  drone = new THREE.Group();
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0x23272d });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(9, 2.4, 9), bodyMat);
+  body.castShadow = true; drone.add(body);
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(5, 1.6, 5),
+    new THREE.MeshLambertMaterial({ color: 0xd0d6dd }));
+  shell.position.y = 1.9; drone.add(shell);
+  const gimbal = new THREE.Mesh(new THREE.SphereGeometry(1.9, 10, 8),
+    new THREE.MeshLambertMaterial({ color: 0x111418 }));
+  gimbal.position.y = -2.4; drone.add(gimbal);
+  const armMat = new THREE.MeshLambertMaterial({ color: 0x5c656e });
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([ax,az])=>{
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(9, 0.6, 1), armMat);
+    arm.position.set(ax*5.6, 0.3, az*5.6); arm.rotation.y = Math.atan2(az, ax);
+    arm.castShadow = true; drone.add(arm);
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(5, 20),
+      new THREE.MeshBasicMaterial({ color: 0xcfd6dd, transparent: true, opacity: 0.2, side: THREE.DoubleSide }));
+    disc.rotation.x = -Math.PI/2; disc.position.set(ax*9, 1.4, az*9); drone.add(disc);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(9.5, 0.25, 0.8),
+      new THREE.MeshLambertMaterial({ color: 0x191c20 }));
+    blade.position.set(ax*9, 1.5, az*9); drone.add(blade); blades.push(blade);
+  });
+  scene.add(drone);
+
+  // ── FOV cone: apex at gimbal, base on the ground; rebuilt as AGL varies ──
+  cone = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 30, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffe14d, transparent: true, opacity: 0.12,
+      side: THREE.DoubleSide, depthWrite: false }));
+  scene.add(cone);
+
+  // footprint glow ring where the centre ray meets the ground
+  footprintRing = new THREE.Mesh(new THREE.RingGeometry(0.92, 1.0, 36),
+    new THREE.MeshBasicMaterial({ color: 0xffe97a, transparent: true, opacity: 0.85,
+      side: THREE.DoubleSide, depthWrite: false }));
+  footprintRing.rotation.x = -Math.PI/2;
+  scene.add(footprintRing);
+
+  // ── dust puffs behind the drone ────────────────────────────────────
+  dustGroup = new THREE.Group(); scene.add(dustGroup);
+  const dustTex = (function(){
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const gr = g.createRadialGradient(32,32,2, 32,32,30);
+    gr.addColorStop(0, 'rgba(216,200,160,0.55)'); gr.addColorStop(1, 'rgba(216,200,160,0)');
+    g.fillStyle = gr; g.fillRect(0,0,64,64);
+    return new THREE.CanvasTexture(c);
+  })();
+  for (let i = 0; i < 40; i++){
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: dustTex, transparent: true, opacity: 0, depthWrite: false }));
+    sp.scale.set(14, 14, 1);
+    sp.userData = { life: 0 };
+    dustGroup.add(sp); dust.push(sp);
+  }
+
+  document.getElementById('loading').style.opacity = 0;
+  setTimeout(()=>document.getElementById('loading').remove(), 700);
+  animate();
+}
+
+// text label sprite helper
+function textSprite(txt, color){
+  const c = document.createElement('canvas'); c.width = 512; c.height = 96;
+  const g = c.getContext('2d');
+  g.font = '600 34px -apple-system, Segoe UI, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = '#000'; g.shadowBlur = 10;
+  g.fillStyle = color; g.fillText(txt, 256, 48);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  sp.scale.set(120, 22.5, 1);
+  return sp;
+}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+// ── post-processing: subtle bloom (graceful fallback to plain render) ─
+let composer = null;
+try {
+  if (THREE.EffectComposer && THREE.UnrealBloomPass){
+    composer = new THREE.EffectComposer(renderer);
+    composer.addPass(new THREE.RenderPass(scene, camera));
+    const bloom = new THREE.UnrealBloomPass(
+      new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.7, 0.86);
+    composer.addPass(bloom);
+  }
+} catch(e){ composer = null; }
+
+// ════════════════════════ SIMULATION STATE ═══════════════════════════
+let wi = 0;
+let dronePos = new THREE.Vector3();
+let covCells = new Uint8Array(200 * 150);   // 10 m coverage grid over the search area
+let covCount = 0;
+let trailPts = [];                          // recent footprint centres {x,y,z,t}
+let timeScale = 8;
+
+document.getElementById('tTime').addEventListener('input', function(){
+  timeScale = +this.value;
+  document.getElementById('vTime').textContent = timeScale;
+});
+document.getElementById('tTrail').addEventListener('change', function(){
+  trailLine.visible = this.checked; covMesh.visible = this.checked;
+});
+document.getElementById('tCone').addEventListener('change', function(){
+  cone.visible = this.checked; footprintRing.visible = this.checked;
+});
+document.getElementById('tMark').addEventListener('change', function(){
+  incidents.forEach(m => m.visible = this.checked);
+});
+document.getElementById('tPath').addEventListener('change', function(){
+  plannedPath.visible = this.checked; waypointDots.visible = this.checked;
+});
+
+function markCoverage(x, z){
+  // persistent paint on the terrain texture
+  const px = (x + HALF) / TERRAIN_SIZE * 1024;
+  const pz = (z + HALF) / TERRAIN_SIZE * 1024;
+  const r = SWATH / 2 / TERRAIN_SIZE * 1024;
+  covCtx.fillStyle = 'rgba(63,185,80,0.40)';
+  covCtx.beginPath(); covCtx.arc(px, pz, r, 0, 7); covCtx.fill();
+  covTex.needsUpdate = true;
+  // coverage % bookkeeping on a 10 m grid
+  const gx0 = Math.max(0, Math.floor((x - SWATH/2 - AREA.x0) / 10));
+  const gx1 = Math.min(199, Math.ceil((x + SWATH/2 - AREA.x0) / 10));
+  const gz0 = Math.max(0, Math.floor((z - SWATH/2 - AREA.z0) / 10));
+  const gz1 = Math.min(149, Math.ceil((z + SWATH/2 - AREA.z0) / 10));
+  for (let gz = gz0; gz <= gz1; gz++) for (let gx = gx0; gx <= gx1; gx++){
+    const cx = AREA.x0 + gx*10 + 5 - x, cz = AREA.z0 + gz*10 + 5 - z;
+    if (cx*cx + cz*cz <= (SWATH/2)*(SWATH/2)){
+      const idx = gz*200 + gx;
+      if (!covCells[idx]){ covCells[idx] = 1; covCount++; }
+    }
+  }
+}
+
+// ════════════════════════ MAIN LOOP ═══════════════════════════════════
+const clock = new THREE.Clock();
+let detected = 0, dustTick = 0;
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const simDt = dt * timeScale;
+  const now = performance.now();
+
+  // ── drone along the lawnmower waypoints (looping) ──────────────────
+  if (wayPts.length){
+    if (dronePos.lengthSq() === 0) dronePos.set(wayPts[0][0], 0, wayPts[0][1]);
+    const tgt = new THREE.Vector3(wayPts[wi][0], 0, wayPts[wi][1]);
+    const dirv = tgt.clone().sub(new THREE.Vector3(dronePos.x, 0, dronePos.z));
+    const dlen = dirv.length();
+    if (dlen < 4){ wi = (wi + 1) % wayPts.length; if (wi === 0){ /* loop forever */ } }
+    else {
+      dirv.normalize();
+      dronePos.addScaledVector(dirv, SPEED * simDt);
+      // smooth yaw toward travel direction
+      const want = Math.atan2(dirv.x, dirv.z);
+      let cur = drone.rotation.y;
+      let diff = ((want - cur + Math.PI*3) % (Math.PI*2)) - Math.PI;
+      drone.rotation.y = cur + diff * Math.min(1, dt*4);
+    }
+  }
+
+  // terrain-following at constant AGL (ground sampled analytically — cheaper
+  // than a Raycaster against 73k triangles, and exact for our height field)
+  const gy = groundY(dronePos.x, dronePos.z);
+  drone.position.set(dronePos.x, gy + ALT_AGL, dronePos.z);
+  drone.rotation.z = Math.sin(now * 0.0014) * 0.03;
+
+  // rotors: speed proportional to flight speed (time-lapse included)
+  blades.forEach(b => b.rotation.y += dt * (8 + SPEED * timeScale * 0.5));
+
+  // ── FOV cone + footprint hugging the ground ────────────────────────
+  const agl = drone.position.y - gy;                    // true AGL right now
+  const baseR = agl * Math.tan(FOV_DEG/2 * Math.PI/180);
+  cone.scale.set(baseR, agl, baseR);
+  cone.position.set(drone.position.x, gy + agl/2 - 2.4, drone.position.z);
+  footprintRing.scale.set(baseR, baseR, 1);
+  footprintRing.position.set(dronePos.x, gy + 2.0, dronePos.z);
+  footprintRing.material.opacity = 0.55 + 0.3 * Math.sin(now * 0.006);
+
+  // ── coverage + fading ribbon ────────────────────────────────────────
+  if (wayPts.length){
+    markCoverage(dronePos.x, dronePos.z);
+    trailPts.push({ x: dronePos.x, y: gy + 6, z: dronePos.z, t: now });
+    while (trailPts.length > 360 || (trailPts.length && now - trailPts[0].t > 6000)) trailPts.shift();
+    const n = trailPts.length;
+    for (let i = 0; i < n; i++){
+      const p = trailPts[i], a = (i+1) / n;            // older → darker (fade)
+      trailPositions[i*3] = p.x; trailPositions[i*3+1] = p.y; trailPositions[i*3+2] = p.z;
+      trailColors[i*3] = 0.15 * a; trailColors[i*3+1] = 0.95 * a; trailColors[i*3+2] = 0.3 * a;
+    }
+    trailLine.geometry.setDrawRange(0, n);
+    trailLine.geometry.attributes.position.needsUpdate = true;
+    trailLine.geometry.attributes.color.needsUpdate = true;
+  }
+
+  // ── incidents: pulse; detect when footprint covers them ────────────
+  incidents.forEach(m => {
+    const u = m.userData;
+    const pul = 1 + 0.25 * Math.sin(now * 0.004 + u.phase);
+    u.halo.scale.set(pul, pul, 1);
+    if (!u.detected){
+      const ddx = m.position.x - dronePos.x, ddz = m.position.z - dronePos.z;
+      if (ddx*ddx + ddz*ddz <= (SWATH/2)*(SWATH/2)){
+        u.detected = true; detected++;
+        u.core.material.emissiveIntensity = 2.2;
+        u.halo.material.opacity = 0.95;
+        u.halo.scale.set(1.8, 1.8, 1);
+        u.label.material.map = textSprite('✔ DETECTED — Incident', '#7dff9b').material.map;
+      }
+    }
+  });
+
+  // ── dust puffs ──────────────────────────────────────────────────────
+  dustTick += dt;
+  if (dustTick > 0.12){
+    dustTick = 0;
+    const sp = dust.find(s => s.userData.life <= 0);
+    if (sp){
+      sp.position.set(drone.position.x + (Math.random()-0.5)*6,
+                      drone.position.y - 6, drone.position.z + (Math.random()-0.5)*6);
+      sp.userData.life = 1;
+    }
+  }
+  dust.forEach(sp => {
+    if (sp.userData.life > 0){
+      sp.userData.life -= dt * 0.5;
+      sp.material.opacity = 0.35 * Math.max(0, sp.userData.life);
+      sp.position.y += dt * 4;
+      const sc = 14 + (1 - sp.userData.life) * 26;
+      sp.scale.set(sc, sc, 1);
+    } else sp.material.opacity = 0;
+  });
+
+  // ── HUD ─────────────────────────────────────────────────────────────
+  document.getElementById('hAlt').textContent = Math.round(agl) + ' m';
+  document.getElementById('hSpd').textContent = SPEED + ' m/s (×' + timeScale + ')';
+  document.getElementById('hCov').textContent = (covCount / (200*150) * 100).toFixed(1) + '%';
+  document.getElementById('hDet').textContent = detected + ' / 6';
+
+  controls.update();
+  if (composer) composer.render(); else renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', function(){
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  if (composer) composer.setSize(innerWidth, innerHeight);
+});
+
+})();
+</script>
+</body>
+</html>
