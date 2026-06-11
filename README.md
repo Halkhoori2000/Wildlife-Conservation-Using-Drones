@@ -59,4 +59,4 @@ The analysis is based on the The Pennsylvania State University research paper "P
 ## Course
 
 CMPSC/DS 442 — Artificial Intelligence  
-The Pennsylvania State University
+The Pennsylvania State University · 2022
