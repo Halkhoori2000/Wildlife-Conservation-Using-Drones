@@ -1,8 +1,10 @@
 # Wildlife Conservation Using Drones — GIS & AI Research
 
+*CMPSC/DS 442 — Artificial Intelligence · The Pennsylvania State University · 2022*
+
 A research presentation examining how GIS spatial analysis and UAV drones can be used to predict and prevent elephant poaching. The project studies 156 known poaching incidents in the Tsavo region of Kenya (8,150 sq miles) and models how drone surveillance, risk mapping, and strategic ranger deployment can protect at-risk wildlife.
 
-The analysis is based on the The Pennsylvania State University research paper "Predicting and Preventing Elephant Poaching Incidents through Statistical Analysis, GIS-Based Risk Analysis, and Aerial Surveillance Flight Path Modeling" (Shaffer & Bishop). The team applied ESRI ArcGIS with the Spatial Analyst Extension, R-STAT for point pattern analysis, and GeoDa for spatial autocorrelation. The pipeline constructs a GIS risk map by correlating 156 poaching incident locations with physical features (roads, water sources, land cover types), models drone flight paths from camera FOV and battery constraints using ArduPilot Mega Planner, and calculates optimal ranger station placement via travel-cost surfaces.
+The analysis is based on the Pennsylvania State University research paper "Predicting and Preventing Elephant Poaching Incidents through Statistical Analysis, GIS-Based Risk Analysis, and Aerial Surveillance Flight Path Modeling" (Shaffer & Bishop). The team applied ESRI ArcGIS with the Spatial Analyst Extension, R-STAT for point pattern analysis, and GeoDa for spatial autocorrelation. The pipeline constructs a GIS risk map by correlating 156 poaching incident locations with physical features (roads, water sources, land cover types), models drone flight paths from camera FOV and battery constraints using ArduPilot Mega Planner, and calculates optimal ranger station placement via travel-cost surfaces.
 
 **[Live Demo →](https://halkhoori2000.github.io/Wildlife-Conservation-Using-Drones/)**
 
