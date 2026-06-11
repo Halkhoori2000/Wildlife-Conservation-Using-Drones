@@ -374,73 +374,115 @@
     </div>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>\n  <script>
   (function(){
     if (typeof THREE === 'undefined'){ document.getElementById('simWidget').style.display='none'; return; }
     let renderer;
     const canvas = document.getElementById('simCanvas');
     try { renderer = new THREE.WebGLRenderer({canvas, antialias:true}); }
     catch(e){ document.getElementById('simWidget').style.display='none'; return; }
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
 
-    const M_PER_UNIT = 20;                       // 1 world unit = 20 m
+    const M_PER_UNIT = 20;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d1117);
-    scene.fog = new THREE.Fog(0x0d1117, 120, 320);
-    const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 600);
+    scene.background = new THREE.Color(0x9fc1e0);
+    scene.fog = new THREE.Fog(0xb9c9bb, 150, 400);
+    const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 700);
+
+    // sunlight + sky bounce
+    const sun = new THREE.DirectionalLight(0xfff1d6, 1.25);
+    sun.position.set(90, 130, -70);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left=-140; sun.shadow.camera.right=140;
+    sun.shadow.camera.top=140; sun.shadow.camera.bottom=-140;
+    sun.shadow.camera.far=400; sun.shadow.bias=-0.0005;
+    scene.add(sun);
+    scene.add(new THREE.HemisphereLight(0xbfd6f0, 0x8a7a50, 0.55));
 
     function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
     const rng = mulberry32(442);
 
-    // ── terrain (low-poly savanna)
-    const TW=220, TH=150, SEG=55;
+    // ── terrain with procedural savanna texture
+    const TW=220, TH=150, SEG=80;
+    function groundY(x,z){ return Math.sin(x*0.045)*1.6 + Math.cos(z*0.06)*1.3 + Math.sin((x+z)*0.025)*2.0 + Math.sin(x*0.11+z*0.07)*0.5; }
     const geo = new THREE.PlaneGeometry(TW, TH, SEG, Math.round(SEG*TH/TW));
     geo.rotateX(-Math.PI/2);
     const pos = geo.attributes.position;
-    const colors = [];
-    const c1=new THREE.Color(0x8a7a3a), c2=new THREE.Color(0x6b8f3e), c3=new THREE.Color(0x4f7a35);
-    for (let i=0;i<pos.count;i++){
-      const x=pos.getX(i), z=pos.getZ(i);
-      const h = Math.sin(x*0.045)*1.4 + Math.cos(z*0.06)*1.2 + Math.sin((x+z)*0.025)*1.8;
-      pos.setY(i, h);
-      const t = Math.min(1, Math.max(0, (h+2)/6));
-      const col = t<0.5 ? c1.clone().lerp(c2, t*2) : c2.clone().lerp(c3, (t-0.5)*2);
-      colors.push(col.r, col.g, col.b);
+    for (let i=0;i<pos.count;i++) pos.setY(i, groundY(pos.getX(i), pos.getZ(i)));
+    geo.computeVertexNormals();
+    const tc=document.createElement('canvas'); tc.width=1024; tc.height=700;
+    const tx=tc.getContext('2d');
+    const grad=tx.createLinearGradient(0,0,1024,700);
+    grad.addColorStop(0,'#9a8b4f'); grad.addColorStop(0.5,'#7d9148'); grad.addColorStop(1,'#6b8542');
+    tx.fillStyle=grad; tx.fillRect(0,0,1024,700);
+    const trng=mulberry32(99);
+    for (let i=0;i<4200;i++){
+      const x=trng()*1024, y=trng()*700, r=2+trng()*9;
+      const shades=['rgba(120,140,70,0.20)','rgba(150,130,70,0.18)','rgba(90,110,55,0.20)','rgba(170,150,95,0.13)'];
+      tx.fillStyle=shades[Math.floor(trng()*4)];
+      tx.beginPath(); tx.arc(x,y,r,0,7); tx.fill();
     }
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors,3));
-    scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({vertexColors:true})));
-    function groundY(x,z){ return Math.sin(x*0.045)*1.4 + Math.cos(z*0.06)*1.2 + Math.sin((x+z)*0.025)*1.8; }
+    const terrTex=new THREE.CanvasTexture(tc);
+    const terrain=new THREE.Mesh(geo, new THREE.MeshLambertMaterial({map:terrTex}));
+    terrain.receiveShadow=true;
+    scene.add(terrain);
 
-    // ── river + roads
-    function ribbon(pts, color, w){
-      const curve = new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0], groundY(p[0],p[1])+0.25, p[1])));
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 60, w, 5),
-        new THREE.MeshBasicMaterial({color}));
-      scene.add(tube); return curve;
+    // ── river (specular water) + dirt roads
+    function ribbon(pts, mat, w, lift){
+      const curve=new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0], groundY(p[0],p[1])+lift, p[1])));
+      const tube=new THREE.Mesh(new THREE.TubeGeometry(curve, 80, w, 6), mat);
+      tube.receiveShadow=true; scene.add(tube); return curve;
     }
-    const river = ribbon([[105,-65],[60,-30],[20,5],[-40,35],[-95,68]], 0x1f4d6e, 0.9);
-    const roadA = ribbon([[-100,55],[-40,20],[40,-5],[100,-25]], 0x3d2f1f, 0.5);
-    const roadB = ribbon([[-80,-65],[-30,-20],[30,40],[70,68]], 0x3d2f1f, 0.5);
+    const waterMat=new THREE.MeshPhongMaterial({color:0x2e6e8e, specular:0xbcd9ee, shininess:90, transparent:true, opacity:0.95});
+    const dirtMat=new THREE.MeshLambertMaterial({color:0x7a6443});
+    const river=ribbon([[105,-65],[60,-30],[20,5],[-40,35],[-95,68]], waterMat, 1.0, 0.25);
+    const roadA=ribbon([[-100,55],[-40,20],[40,-5],[100,-25]], dirtMat, 0.6, 0.18);
+    const roadB=ribbon([[-80,-65],[-30,-20],[30,40],[70,68]], dirtMat, 0.6, 0.18);
 
-    // ── trees (acacia-ish)
-    for (let i=0;i<70;i++){
+    // ── umbrella acacias + shrubs + rocks
+    const trunkMat=new THREE.MeshLambertMaterial({color:0x4a3520});
+    for (let i=0;i<60;i++){
       const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95;
-      const y=groundY(x,z), s=0.7+rng()*1.2;
-      const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.12*s,0.18*s,2.2*s,5), new THREE.MeshBasicMaterial({color:0x4a3520}));
-      trunk.position.set(x,y+1.1*s,z);
-      const crown=new THREE.Mesh(new THREE.ConeGeometry(1.9*s,0.9*s,7), new THREE.MeshBasicMaterial({color:0x2e5e2a}));
-      crown.position.set(x,y+2.4*s,z);
-      scene.add(trunk); scene.add(crown);
+      const y=groundY(x,z), s=0.8+rng()*1.3;
+      const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.13*s,0.22*s,2.6*s,6), trunkMat);
+      trunk.position.set(x,y+1.3*s,z); trunk.castShadow=true; scene.add(trunk);
+      const g=0.28+rng()*0.18;
+      const crownMat=new THREE.MeshLambertMaterial({color:new THREE.Color(0.18+rng()*0.08, 0.36+g*0.3, 0.12)});
+      const blobs=2+Math.floor(rng()*2);
+      for (let b=0;b<blobs;b++){
+        const crown=new THREE.Mesh(new THREE.SphereGeometry((1.6+rng()*0.9)*s, 7, 5), crownMat);
+        crown.scale.y=0.32;
+        crown.position.set(x+(rng()-0.5)*1.6*s, y+2.7*s+rng()*0.3, z+(rng()-0.5)*1.6*s);
+        crown.castShadow=true; scene.add(crown);
+      }
+    }
+    const shrubMat=new THREE.MeshLambertMaterial({color:0x55683a});
+    for (let i=0;i<90;i++){
+      const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95, s=0.25+rng()*0.5;
+      const sh=new THREE.Mesh(new THREE.SphereGeometry(s,6,4), shrubMat);
+      sh.scale.y=0.55; sh.position.set(x, groundY(x,z)+s*0.4, z); sh.castShadow=true; scene.add(sh);
+    }
+    const rockMat=new THREE.MeshLambertMaterial({color:0x8d8a80});
+    for (let i=0;i<28;i++){
+      const x=(rng()-0.5)*TW*0.9, z=(rng()-0.5)*TH*0.9, s=0.4+rng()*1.1;
+      const rk=new THREE.Mesh(new THREE.DodecahedronGeometry(s,0), rockMat);
+      rk.position.set(x, groundY(x,z)+s*0.4, z);
+      rk.rotation.set(rng()*3,rng()*3,rng()*3); rk.castShadow=true; scene.add(rk);
     }
 
-    // ── incidents (illustrative, clustered near features — same idea as the 2D widget)
+    // ── incidents (illustrative)
     const featureCurves=[river, roadA, roadB];
-    const incGeo = new THREE.SphereGeometry(0.45, 6, 5);
-    const incMat = new THREE.MeshBasicMaterial({color:0xf85149});
+    const incGeo=new THREE.SphereGeometry(0.45, 7, 5);
+    const incMat=new THREE.MeshLambertMaterial({color:0x7a1410, emissive:0xff2e22, emissiveIntensity:0.55});
     for (let i=0;i<156;i++){
-      const c = featureCurves[Math.floor(rng()*3)];
-      const p = c.getPoint(rng());
-      const g = ()=> (rng()+rng()+rng()-1.5)*9;
+      const c=featureCurves[Math.floor(rng()*3)];
+      const p=c.getPoint(rng());
+      const g=()=> (rng()+rng()+rng()-1.5)*9;
       const x=p.x+g(), z=p.z+g();
       const m=new THREE.Mesh(incGeo, incMat);
       m.position.set(x, groundY(x,z)+0.5, z);
@@ -448,27 +490,31 @@
     }
 
     // ── risk zone + ranger station
-    const zone = {x0:-60, x1:5, z0:-5, z1:45};
-    const zoneMesh = new THREE.Mesh(new THREE.PlaneGeometry(zone.x1-zone.x0, zone.z1-zone.z0),
-      new THREE.MeshBasicMaterial({color:0xf85149, transparent:true, opacity:0.10, side:THREE.DoubleSide}));
+    const zone={x0:-60,x1:5,z0:-5,z1:45};
+    const zoneMesh=new THREE.Mesh(new THREE.PlaneGeometry(zone.x1-zone.x0, zone.z1-zone.z0),
+      new THREE.MeshBasicMaterial({color:0xff4a3a, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false}));
     zoneMesh.rotation.x=-Math.PI/2;
-    zoneMesh.position.set((zone.x0+zone.x1)/2, 3.6, (zone.z0+zone.z1)/2);
+    zoneMesh.position.set((zone.x0+zone.x1)/2, 4.6, (zone.z0+zone.z1)/2);
     scene.add(zoneMesh);
-    const station = new THREE.Group();
-    const tower=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.7,5,6), new THREE.MeshBasicMaterial({color:0x8b949e}));
-    const cab=new THREE.Mesh(new THREE.BoxGeometry(2.4,1.4,2.4), new THREE.MeshBasicMaterial({color:0xd29922}));
-    cab.position.y=3.2; station.add(tower); station.add(cab);
+    const station=new THREE.Group();
+    const tower=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.8,5,7), new THREE.MeshLambertMaterial({color:0x9aa2ab}));
+    tower.castShadow=true;
+    const cab=new THREE.Mesh(new THREE.BoxGeometry(2.6,1.5,2.6), new THREE.MeshLambertMaterial({color:0xd29922}));
+    cab.position.y=3.3; cab.castShadow=true;
+    const roof=new THREE.Mesh(new THREE.ConeGeometry(2.1,1,4), new THREE.MeshLambertMaterial({color:0x8a5a22}));
+    roof.position.y=4.5; roof.rotation.y=Math.PI/4; roof.castShadow=true;
+    station.add(tower); station.add(cab); station.add(roof);
     const stx=zone.x1+8, stz=zone.z0-6;
     station.position.set(stx, groundY(stx,stz)+2.5, stz);
     scene.add(station);
 
-    // ── coverage paint (canvas texture overlay)
+    // ── coverage paint overlay
     const cov=document.createElement('canvas'); cov.width=512; cov.height=350;
     const cctx=cov.getContext('2d');
     const covTex=new THREE.CanvasTexture(cov);
     const covMesh=new THREE.Mesh(new THREE.PlaneGeometry(TW,TH),
-      new THREE.MeshBasicMaterial({map:covTex, transparent:true, opacity:0.5, depthWrite:false}));
-    covMesh.rotation.x=-Math.PI/2; covMesh.position.y=3.4; scene.add(covMesh);
+      new THREE.MeshBasicMaterial({map:covTex, transparent:true, opacity:0.45, depthWrite:false}));
+    covMesh.rotation.x=-Math.PI/2; covMesh.position.y=4.4; scene.add(covMesh);
     function paint(x,z,swathUnits){
       const px=(x+TW/2)/TW*512, pz=(z+TH/2)/TH*350;
       const r=Math.max(2, swathUnits/2/TW*512);
@@ -477,35 +523,44 @@
       covTex.needsUpdate=true;
     }
 
-    // ── drone
+    // ── drone (detailed)
     const drone=new THREE.Group();
-    const body=new THREE.Mesh(new THREE.BoxGeometry(1.4,0.4,1.4), new THREE.MeshBasicMaterial({color:0xe6edf3}));
-    drone.add(body);
-    const gimbal=new THREE.Mesh(new THREE.SphereGeometry(0.3,8,6), new THREE.MeshBasicMaterial({color:0x1f6feb}));
-    gimbal.position.y=-0.35; drone.add(gimbal);
-    const blades=[];
+    const body=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.42,1.5), new THREE.MeshLambertMaterial({color:0x2b3036}));
+    body.castShadow=true; drone.add(body);
+    const top=new THREE.Mesh(new THREE.BoxGeometry(0.8,0.25,0.8), new THREE.MeshLambertMaterial({color:0xd0d6dd}));
+    top.position.y=0.32; drone.add(top);
+    const gimbal=new THREE.Mesh(new THREE.SphereGeometry(0.32,10,8), new THREE.MeshLambertMaterial({color:0x14171b}));
+    gimbal.position.y=-0.4; drone.add(gimbal);
+    const lens=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,0.1,10), new THREE.MeshLambertMaterial({color:0x1f6feb}));
+    lens.position.y=-0.62; drone.add(lens);
+    const blades=[], discMat=new THREE.MeshBasicMaterial({color:0xcfd6dd, transparent:true, opacity:0.22, side:THREE.DoubleSide});
+    const armMat=new THREE.MeshLambertMaterial({color:0x5c656e});
     [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([ax,az])=>{
-      const arm=new THREE.Mesh(new THREE.BoxGeometry(1.3,0.08,0.14), new THREE.MeshBasicMaterial({color:0x8b949e}));
-      arm.position.set(ax*0.9,0.05,az*0.9); arm.rotation.y=Math.atan2(az,ax); drone.add(arm);
-      const blade=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.04,0.12), new THREE.MeshBasicMaterial({color:0x3fb950}));
-      blade.position.set(ax*1.45,0.18,az*1.45); drone.add(blade); blades.push(blade);
+      const arm=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.1,0.16), armMat);
+      arm.position.set(ax*0.95,0.05,az*0.95); arm.rotation.y=Math.atan2(az,ax); arm.castShadow=true; drone.add(arm);
+      const hub=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.22,8), new THREE.MeshLambertMaterial({color:0x14171b}));
+      hub.position.set(ax*1.5,0.18,az*1.5); drone.add(hub);
+      const disc=new THREE.Mesh(new THREE.CircleGeometry(0.85,20), discMat);
+      disc.rotation.x=-Math.PI/2; disc.position.set(ax*1.5,0.26,az*1.5); drone.add(disc);
+      const blade=new THREE.Mesh(new THREE.BoxGeometry(1.6,0.04,0.13), new THREE.MeshLambertMaterial({color:0x22262b}));
+      blade.position.set(ax*1.5,0.27,az*1.5); drone.add(blade); blades.push(blade);
     });
+    drone.castShadow=true;
     scene.add(drone);
-    // FOV cone
     let cone=null;
     function rebuildCone(altM){
       if (cone) drone.remove(cone);
       const hUnits=altM/M_PER_UNIT;
       const fov=90*Math.PI/180;
       const baseR=altM*Math.tan(fov/2)/M_PER_UNIT;
-      const cg=new THREE.ConeGeometry(baseR, hUnits, 24, 1, true);
-      cone=new THREE.Mesh(cg, new THREE.MeshBasicMaterial({color:0xffe14d, transparent:true, opacity:0.13, side:THREE.DoubleSide, depthWrite:false}));
+      cone=new THREE.Mesh(new THREE.ConeGeometry(baseR, hUnits, 28, 1, true),
+        new THREE.MeshBasicMaterial({color:0xffe14d, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false}));
       cone.position.y=-hUnits/2;
       drone.add(cone);
       return baseR*2;
     }
 
-    // ── patrol path (lawnmower over the risk zone)
+    // ── patrol path
     const way=[]; let dir=1;
     for (let z=zone.z0+4; z<=zone.z1-2; z+=9){
       if (dir>0){ way.push([zone.x0+3,z]); way.push([zone.x1-3,z]); }
@@ -515,7 +570,6 @@
     let wi=0, resume=0, mode='PATROL', battery=100, covered=0;
     let dronePos=new THREE.Vector3(way[0][0], 0, way[0][1]);
 
-    // ── state from sliders
     let altM=120, speed=15, swathUnits=rebuildCone(120), playing=true, follow=false;
     document.getElementById('sAlt').addEventListener('input',e=>{altM=+e.target.value;
       document.getElementById('sAltV').textContent=altM; swathUnits=rebuildCone(altM);});
@@ -525,7 +579,6 @@
     document.getElementById('simFollow').addEventListener('click',function(){follow=!follow;
       this.style.background=follow?'var(--accent)':'var(--surface)';});
 
-    // ── camera controls (orbit + WASD)
     let theta=0.8, phi=0.45, dist=95, drag=null;
     const target=new THREE.Vector3(-25,4,20);
     canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};});
@@ -533,20 +586,20 @@
       theta-=(e.clientX-drag.x)*0.005; phi=Math.min(1.35,Math.max(0.1,phi+(e.clientY-drag.y)*0.004));
       drag={x:e.clientX,y:e.clientY};});
     window.addEventListener('pointerup',()=>drag=null);
-    canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.min(220,Math.max(18,dist+e.deltaY*0.06));},{passive:false});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.min(240,Math.max(16,dist+e.deltaY*0.06));},{passive:false});
     const keys={};
     window.addEventListener('keydown',e=>{const k=e.key.toLowerCase();if('wasd'.includes(k)){keys[k]=true;}});
     window.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
 
-    // ── loop
     const clock=new THREE.Clock();
     function animate(){
       requestAnimationFrame(animate);
       const dt=Math.min(clock.getDelta(),0.05);
-      blades.forEach(b=>b.rotation.y+=dt*40);
+      blades.forEach(b=>b.rotation.y+=dt*45);
+      zoneMesh.material.opacity=0.08+0.04*Math.sin(performance.now()*0.002);
 
       if (playing){
-        const spdUnits=speed/M_PER_UNIT*6;          // ×6 time-lapse so patrol is watchable
+        const spdUnits=speed/M_PER_UNIT*6;
         if (mode==='PATROL'){
           const tgt=new THREE.Vector3(way[wi][0],0,way[wi][1]);
           const d=tgt.clone().sub(dronePos); d.y=0;
@@ -568,8 +621,8 @@
       }
       const gy=groundY(dronePos.x,dronePos.z);
       drone.position.set(dronePos.x, gy+altM/M_PER_UNIT, dronePos.z);
+      drone.rotation.z=Math.sin(performance.now()*0.0015)*0.04;
 
-      // WASD pans the orbit target
       const pan=30*dt;
       if(keys.w)target.z-=pan; if(keys.s)target.z+=pan;
       if(keys.a)target.x-=pan; if(keys.d)target.x+=pan;
@@ -587,7 +640,6 @@
         'MODE <b>'+mode+'</b> · ALT <b>'+altM+' m</b> · SPD <b>'+speed+' m/s</b> (×6 time-lapse)<br>'+
         'FOV 90° → swath <b>'+swathM+' m</b> · covered <b>'+covered.toFixed(2)+' km²</b> · battery <b>'+Math.max(0,Math.round(battery))+'%</b>';
 
-      // resize
       const w=canvas.clientWidth, h=canvas.clientHeight;
       if (canvas.width!==w||canvas.height!==h){ renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
       renderer.render(scene,camera);
