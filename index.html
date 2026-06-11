@@ -672,7 +672,9 @@
 
   <div class="iwidget">
     <h3>③ Drone coverage calculator</h3>
-    <p>How much ground can one surveillance flight watch? Same inputs the study fed into ArduPilot Mega Planner.</p>
+    <p>How much ground can one surveillance flight watch? Same inputs the study fed into ArduPilot Mega Planner.
+       <b>The trade-off:</b> higher altitude and wider FOV sweep more ground per pass — but every pixel then covers more ground,
+       and past a point the camera can no longer resolve a person or carcass. Coverage is worthless if you cannot detect anything in it.</p>
     <div class="iw-grid">
       <label>Altitude <span id="vAlt">120</span> m
         <input type="range" id="iAlt" min="40" max="400" value="120"></label>
@@ -687,7 +689,9 @@
       <div><span id="oSwath">—</span><small>ground swath width</small></div>
       <div><span id="oArea">—</span><small>area covered per flight</small></div>
       <div><span id="oFlights">—</span><small>flights to sweep a 100 km² hotspot</small></div>
+      <div><span id="oGsd">—</span><small>ground detail per pixel (4K camera)</small></div>
     </div>
+    <div id="oVerdict" style="margin-top:10px;font-size:13px;border:1px solid var(--border);border-radius:6px;padding:10px 14px"></div>
   </div>
 
   <style>
@@ -795,6 +799,19 @@
       document.getElementById('oSwath').textContent=Math.round(swath)+' m';
       document.getElementById('oArea').textContent=area.toFixed(2)+' km²';
       document.getElementById('oFlights').textContent=Math.ceil(100/area)+' flights';
+      // ground sampling distance: swath spread over a 4000-px-wide sensor
+      const gsd=swath/4000*100;   // cm per pixel
+      document.getElementById('oGsd').textContent=gsd.toFixed(1)+' cm/px';
+      const v=document.getElementById('oVerdict');
+      let msg, col;
+      if (gsd<=6){ msg='✔ Can identify individual people and carcasses — ideal for evidence-grade surveillance'; col='var(--green)'; }
+      else if (gsd<=16){ msg='✔ Can detect humans and large animals — good patrol setting'; col='var(--green)'; }
+      else if (gsd<=35){ msg='⚠ Only vehicles and elephant-sized shapes are resolvable — people will be missed'; col='var(--orange)'; }
+      else { msg='✘ Too coarse — wide coverage but nothing actionable is detectable at this detail'; col='var(--red)'; }
+      let extra='';
+      if (spd>=22) extra=' · ⚠ at this speed expect motion blur, further reducing detection';
+      v.innerHTML='<b style="color:'+col+'">'+msg+'</b><span style="color:var(--muted)">'+extra+'</span>';
+      v.style.borderColor=col;
     }
     ['iAlt','iFov','iSpd','iTim'].forEach(id=>document.getElementById(id).addEventListener('input',calc));
     calc();
