@@ -358,7 +358,7 @@
     <h3>① 3D Drone Patrol Simulation — Tsavo (illustrative)</h3>
     <p>A surveillance drone sweeps a high-risk zone in a lawnmower pattern. The yellow cone is the camera's field of view —
        its ground footprint uses the study's geometry (swath = 2·altitude·tan(FOV/2)). Green trail = ground actually covered.
-       Terrain: <b>real Tsavo satellite imagery</b> (Esri World Imagery). Red markers = illustrative incident clusters, not the actual study coordinates. <b>Drag</b> to orbit · <b>scroll</b> to zoom ·
+       Terrain: <b>real Tsavo satellite imagery + real elevation data</b> (Esri World Imagery · AWS Terrain Tiles). The elephant herd, village, and red incident markers are illustrative 3D additions — not actual study data. <b>Drag</b> to orbit · <b>scroll</b> to zoom ·
        <b>WASD</b> to move · <b>Follow</b> rides behind the drone.</p>
     <div style="position:relative">
       <canvas id="simCanvas" style="width:100%;height:460px;border:1px solid var(--border);border-radius:6px;background:#0d1117"></canvas>
@@ -387,34 +387,60 @@
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
 
-    const M_PER_UNIT = 20;
+    const M_PER_UNIT = 20, TW = 220, TH = 150;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x9fc1e0);
-    scene.fog = new THREE.Fog(0xb9c9bb, 150, 400);
-    const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 700);
+    scene.fog = new THREE.Fog(0xb9c9bb, 150, 420);
+    const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 800);
 
-    // sunlight + sky bounce
     const sun = new THREE.DirectionalLight(0xfff1d6, 1.25);
     sun.position.set(90, 130, -70);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.left=-140; sun.shadow.camera.right=140;
     sun.shadow.camera.top=140; sun.shadow.camera.bottom=-140;
-    sun.shadow.camera.far=400; sun.shadow.bias=-0.0005;
+    sun.shadow.camera.far=420; sun.shadow.bias=-0.0005;
     scene.add(sun);
     scene.add(new THREE.HemisphereLight(0xbfd6f0, 0x8a7a50, 0.55));
 
     function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
     const rng = mulberry32(442);
 
-    // ── terrain with procedural savanna texture
-    const TW=220, TH=150, SEG=80;
-    function groundY(x,z){ return Math.sin(x*0.045)*1.6 + Math.cos(z*0.06)*1.3 + Math.sin((x+z)*0.025)*2.0 + Math.sin(x*0.11+z*0.07)*0.5; }
-    const geo = new THREE.PlaneGeometry(TW, TH, SEG, Math.round(SEG*TH/TW));
-    geo.rotateX(-Math.PI/2);
-    const pos = geo.attributes.position;
-    for (let i=0;i<pos.count;i++) pos.setY(i, groundY(pos.getX(i), pos.getZ(i)));
-    geo.computeVertexNormals();
+    // ── REAL ELEVATION (AWS terrarium tiles) with procedural fallback
+    let HM = null, hMean = 0;
+    function proceduralY(x,z){ return Math.sin(x*0.045)*1.6 + Math.cos(z*0.06)*1.3 + Math.sin((x+z)*0.025)*2.0; }
+    function groundY(x,z){
+      if (!HM) return proceduralY(x,z);
+      const u=Math.min(1023,Math.max(0,(x+TW/2)/TW*1023)), v=Math.min(1023,Math.max(0,(z+TH/2)/TH*1023));
+      const x0=Math.floor(u), y0=Math.floor(v), fx=u-x0, fy=v-y0;
+      const x1=Math.min(1023,x0+1), y1=Math.min(1023,y0+1);
+      const h=(HM[y0*1024+x0]*(1-fx)+HM[y0*1024+x1]*fx)*(1-fy)+(HM[y1*1024+x0]*(1-fx)+HM[y1*1024+x1]*fx)*fy;
+      return (h - hMean) / M_PER_UNIT * 1.6;   // ×1.6 vertical emphasis
+    }
+    function loadDEM(cb){
+      const z=15, tx0=19894, ty0=16648, n=4;
+      const hc=document.createElement('canvas'); hc.width=1024; hc.height=1024;
+      const hx=hc.getContext('2d');
+      let loaded=0, done=false;
+      function finish(ok){ if(done) return; done=true;
+        if (ok){ try{
+          const d=hx.getImageData(0,0,1024,1024).data;
+          HM=new Float32Array(1024*1024); let sum=0;
+          for (let i=0;i<1024*1024;i++){ const h=d[i*4]*256+d[i*4+1]+d[i*4+2]/256-32768; HM[i]=h; sum+=h; }
+          hMean=sum/(1024*1024);
+        } catch(e){ HM=null; } }
+        cb();
+      }
+      for (let dx=0;dx<n;dx++) for (let dy=0;dy<n;dy++){
+        const img=new Image(); img.crossOrigin='anonymous';
+        img.onload=function(){ hx.drawImage(img,dx*256,dy*256,256,256); if(++loaded===n*n) finish(true); };
+        img.onerror=function(){ finish(false); };
+        img.src='https://s3.amazonaws.com/elevation-tiles-prod/terrarium/'+z+'/'+(tx0+dx)+'/'+(ty0+dy)+'.png';
+      }
+      setTimeout(function(){ finish(false); }, 5000);
+    }
+
+    // ── satellite imagery texture (independent async)
     const tc=document.createElement('canvas'); tc.width=1024; tc.height=1024;
     const tx=tc.getContext('2d');
     const grad=tx.createLinearGradient(0,0,1024,1024);
@@ -422,66 +448,51 @@
     tx.fillStyle=grad; tx.fillRect(0,0,1024,1024);
     const terrTex=new THREE.CanvasTexture(tc);
     terrTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    // real Tsavo East satellite imagery (Esri World Imagery, z15 tiles, ~4.9 km square)
     (function loadSat(){
       const z=15, x0=19894, y0=16648, n=4;
-      let loaded=0;
       for (let dx=0;dx<n;dx++) for (let dy=0;dy<n;dy++){
-        const img=new Image();
-        img.crossOrigin='anonymous';
-        img.onload=function(){
-          tx.drawImage(img, dx*256, dy*256, 256, 256);
-          loaded++;
-          terrTex.needsUpdate=true;
-        };
+        const img=new Image(); img.crossOrigin='anonymous';
+        img.onload=function(){ tx.drawImage(img,dx*256,dy*256,256,256); terrTex.needsUpdate=true; };
         img.src='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'+z+'/'+(y0+dy)+'/'+(x0+dx);
       }
     })();
+
+    // everything below is built once the DEM answers (real heights or fallback)
+    loadDEM(function(){
+
+    const geo = new THREE.PlaneGeometry(TW, TH, 110, 75);
+    geo.rotateX(-Math.PI/2);
+    const pos = geo.attributes.position;
+    for (let i=0;i<pos.count;i++) pos.setY(i, groundY(pos.getX(i), pos.getZ(i)));
+    geo.computeVertexNormals();
     const terrain=new THREE.Mesh(geo, new THREE.MeshLambertMaterial({map:terrTex}));
     terrain.receiveShadow=true;
     scene.add(terrain);
 
-    // ── river (specular water) + dirt roads
     function curveOf(pts){
       return new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(p[0], groundY(p[0],p[1]), p[1])));
     }
-    // invisible guide curves — used only to cluster the illustrative incident points
     const river=curveOf([[105,-65],[60,-30],[20,5],[-40,35],[-95,68]]);
     const roadA=curveOf([[-100,55],[-40,20],[40,-5],[100,-25]]);
     const roadB=curveOf([[-80,-65],[-30,-20],[30,40],[70,68]]);
 
-    // ── umbrella acacias + shrubs + rocks
+    // sparse 3D vegetation for depth (real vegetation is in the imagery)
     const trunkMat=new THREE.MeshLambertMaterial({color:0x4a3520});
     for (let i=0;i<16;i++){
       const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95;
       const y=groundY(x,z), s=0.8+rng()*1.3;
       const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.13*s,0.22*s,2.6*s,6), trunkMat);
       trunk.position.set(x,y+1.3*s,z); trunk.castShadow=true; scene.add(trunk);
-      const g=0.28+rng()*0.18;
-      const crownMat=new THREE.MeshLambertMaterial({color:new THREE.Color(0.18+rng()*0.08, 0.36+g*0.3, 0.12)});
-      const blobs=2+Math.floor(rng()*2);
-      for (let b=0;b<blobs;b++){
+      const crownMat=new THREE.MeshLambertMaterial({color:new THREE.Color(0.2+rng()*0.07, 0.4+rng()*0.1, 0.13)});
+      for (let b=0;b<2+Math.floor(rng()*2);b++){
         const crown=new THREE.Mesh(new THREE.SphereGeometry((1.6+rng()*0.9)*s, 7, 5), crownMat);
         crown.scale.y=0.32;
         crown.position.set(x+(rng()-0.5)*1.6*s, y+2.7*s+rng()*0.3, z+(rng()-0.5)*1.6*s);
         crown.castShadow=true; scene.add(crown);
       }
     }
-    const shrubMat=new THREE.MeshLambertMaterial({color:0x55683a});
-    for (let i=0;i<24;i++){
-      const x=(rng()-0.5)*TW*0.95, z=(rng()-0.5)*TH*0.95, s=0.25+rng()*0.5;
-      const sh=new THREE.Mesh(new THREE.SphereGeometry(s,6,4), shrubMat);
-      sh.scale.y=0.55; sh.position.set(x, groundY(x,z)+s*0.4, z); sh.castShadow=true; scene.add(sh);
-    }
-    const rockMat=new THREE.MeshLambertMaterial({color:0x8d8a80});
-    for (let i=0;i<10;i++){
-      const x=(rng()-0.5)*TW*0.9, z=(rng()-0.5)*TH*0.9, s=0.4+rng()*1.1;
-      const rk=new THREE.Mesh(new THREE.DodecahedronGeometry(s,0), rockMat);
-      rk.position.set(x, groundY(x,z)+s*0.4, z);
-      rk.rotation.set(rng()*3,rng()*3,rng()*3); rk.castShadow=true; scene.add(rk);
-    }
 
-    // ── incidents (illustrative)
+    // incidents (illustrative clusters)
     const featureCurves=[river, roadA, roadB];
     const incGeo=new THREE.SphereGeometry(0.45, 7, 5);
     const incMat=new THREE.MeshLambertMaterial({color:0x7a1410, emissive:0xff2e22, emissiveIntensity:0.55});
@@ -495,13 +506,16 @@
       scene.add(m);
     }
 
-    // ── risk zone + ranger station
+    // risk zone + ranger station
     const zone={x0:-60,x1:5,z0:-5,z1:45};
     const zoneMesh=new THREE.Mesh(new THREE.PlaneGeometry(zone.x1-zone.x0, zone.z1-zone.z0),
       new THREE.MeshBasicMaterial({color:0xff4a3a, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false}));
     zoneMesh.rotation.x=-Math.PI/2;
-    zoneMesh.position.set((zone.x0+zone.x1)/2, 4.6, (zone.z0+zone.z1)/2);
+    let zoneTop=0;
+    for(let zx=zone.x0; zx<=zone.x1; zx+=8) for(let zz=zone.z0; zz<=zone.z1; zz+=8) zoneTop=Math.max(zoneTop, groundY(zx,zz));
+    zoneMesh.position.set((zone.x0+zone.x1)/2, zoneTop+1.2, (zone.z0+zone.z1)/2);
     scene.add(zoneMesh);
+
     const station=new THREE.Group();
     const tower=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.8,5,7), new THREE.MeshLambertMaterial({color:0x9aa2ab}));
     tower.castShadow=true;
@@ -514,13 +528,90 @@
     station.position.set(stx, groundY(stx,stz)+2.5, stz);
     scene.add(station);
 
-    // ── coverage paint overlay
+    // ── village (illustrative ranger village)
+    const wallMat=new THREE.MeshLambertMaterial({color:0xc9b08a});
+    const roofMat=new THREE.MeshLambertMaterial({color:0x77452a});
+    const vx0=42, vz0=-44;
+    for (let i=0;i<6;i++){
+      const hx=vx0+(rng()-0.5)*16, hz=vz0+(rng()-0.5)*14;
+      const hw=2.4+rng()*1.4, hd=2.0+rng()*1.2, hh=1.6+rng()*0.5;
+      const hy=groundY(hx,hz);
+      const walls=new THREE.Mesh(new THREE.BoxGeometry(hw,hh,hd), wallMat);
+      walls.position.set(hx,hy+hh/2,hz); walls.rotation.y=rng()*Math.PI; walls.castShadow=true; walls.receiveShadow=true;
+      scene.add(walls);
+      const hr=new THREE.Mesh(new THREE.ConeGeometry(Math.max(hw,hd)*0.78, 1.1, 4), roofMat);
+      hr.position.set(hx,hy+hh+0.55,hz); hr.rotation.y=walls.rotation.y+Math.PI/4; hr.castShadow=true;
+      scene.add(hr);
+    }
+    const tank=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.1,2.4,10), new THREE.MeshLambertMaterial({color:0x6f7d8c}));
+    tank.position.set(vx0+10, groundY(vx0+10,vz0)+2.6, vz0); tank.castShadow=true;
+    const tankLegs=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,1.6,6), new THREE.MeshLambertMaterial({color:0x4a4f55}));
+    tankLegs.position.set(vx0+10, groundY(vx0+10,vz0)+0.8, vz0);
+    scene.add(tank); scene.add(tankLegs);
+
+    // ── elephant herd (illustrative low-poly, animated)
+    const eleMat=new THREE.MeshLambertMaterial({color:0x8f857c});
+    const tuskMat=new THREE.MeshLambertMaterial({color:0xe8e0cc});
+    function makeElephant(s){
+      const g=new THREE.Group();
+      const body=new THREE.Mesh(new THREE.SphereGeometry(1.5,10,8), eleMat);
+      body.scale.set(1.5,1.05,0.95); body.position.y=2.2; body.castShadow=true; g.add(body);
+      const head=new THREE.Mesh(new THREE.SphereGeometry(0.85,9,7), eleMat);
+      head.position.set(2.2,2.7,0); head.castShadow=true; g.add(head);
+      const trunkG=new THREE.Group();
+      for (let i=0;i<4;i++){
+        const seg=new THREE.Mesh(new THREE.CylinderGeometry(0.20-0.035*i,0.17-0.035*i,0.7,7), eleMat);
+        seg.position.set(0, -0.35-i*0.62, 0.12*i*0.5);
+        trunkG.add(seg);
+      }
+      trunkG.position.set(2.95,2.55,0); g.add(trunkG); g.userData.trunk=trunkG;
+      [-1,1].forEach(sd=>{
+        const ear=new THREE.Mesh(new THREE.SphereGeometry(0.72,7,5), eleMat);
+        ear.scale.set(0.12,1,0.85); ear.position.set(2.05,2.95,sd*0.85); ear.castShadow=true; g.add(ear);
+        const tusk=new THREE.Mesh(new THREE.ConeGeometry(0.07,0.7,6), tuskMat);
+        tusk.position.set(2.85,2.05,sd*0.3); tusk.rotation.z=-1.1; g.add(tusk);
+        [-0.8,0.85].forEach(lx=>{
+          const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.27,0.31,1.7,7), eleMat);
+          leg.position.set(lx,0.85,sd*0.55); leg.castShadow=true; g.add(leg);
+        });
+      });
+      const tail=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.03,1.1,5), eleMat);
+      tail.position.set(-2.2,2.3,0); tail.rotation.z=0.5; g.add(tail);
+      g.scale.set(s,s,s);
+      return g;
+    }
+    const herdAnchor=river.getPoint(0.62);
+    const herd=[];
+    for (let i=0;i<7;i++){
+      const s=i<5?(0.85+rng()*0.25):(0.45+rng()*0.1);   // 5 adults, 2 calves
+      const e=makeElephant(s);
+      e.userData.a=rng()*Math.PI*2;
+      e.userData.spd=0.5+rng()*0.5;
+      e.userData.ox=herdAnchor.x+(rng()-0.5)*20;
+      e.userData.oz=herdAnchor.z+(rng()-0.5)*16;
+      e.userData.heading=rng()*Math.PI*2;
+      e.position.set(e.userData.ox, 0, e.userData.oz);
+      scene.add(e); herd.push(e);
+    }
+
+    // ── birds
+    const birds=[];
+    for (let i=0;i<4;i++){
+      const b=new THREE.Group();
+      const wMat=new THREE.MeshBasicMaterial({color:0x2b2f33, side:THREE.DoubleSide});
+      const w1=new THREE.Mesh(new THREE.PlaneGeometry(1.6,0.32), wMat); w1.position.x=-0.8;
+      const w2=new THREE.Mesh(new THREE.PlaneGeometry(1.6,0.32), wMat); w2.position.x=0.8;
+      b.add(w1); b.add(w2); b.userData={w1,w2,a:rng()*6.28,r:25+rng()*30,h:18+rng()*10,cx:(rng()-0.5)*80,cz:(rng()-0.5)*60,sp:0.25+rng()*0.2};
+      scene.add(b); birds.push(b);
+    }
+
+    // ── coverage paint
     const cov=document.createElement('canvas'); cov.width=512; cov.height=350;
     const cctx=cov.getContext('2d');
     const covTex=new THREE.CanvasTexture(cov);
-    const covMesh=new THREE.Mesh(new THREE.PlaneGeometry(TW,TH),
-      new THREE.MeshBasicMaterial({map:covTex, transparent:true, opacity:0.45, depthWrite:false}));
-    covMesh.rotation.x=-Math.PI/2; covMesh.position.y=4.4; scene.add(covMesh);
+    const covMesh=new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({map:covTex, transparent:true, opacity:0.45, depthWrite:false}));
+    covMesh.position.y=0.4;
+    scene.add(covMesh);
     function paint(x,z,swathUnits){
       const px=(x+TW/2)/TW*512, pz=(z+TH/2)/TH*350;
       const r=Math.max(2, swathUnits/2/TW*512);
@@ -529,7 +620,7 @@
       covTex.needsUpdate=true;
     }
 
-    // ── drone (detailed)
+    // ── drone
     const drone=new THREE.Group();
     const body=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.42,1.5), new THREE.MeshLambertMaterial({color:0x2b3036}));
     body.castShadow=true; drone.add(body);
@@ -551,7 +642,6 @@
       const blade=new THREE.Mesh(new THREE.BoxGeometry(1.6,0.04,0.13), new THREE.MeshLambertMaterial({color:0x22262b}));
       blade.position.set(ax*1.5,0.27,az*1.5); drone.add(blade); blades.push(blade);
     });
-    drone.castShadow=true;
     scene.add(drone);
     let cone=null;
     function rebuildCone(altM){
@@ -566,7 +656,7 @@
       return baseR*2;
     }
 
-    // ── patrol path
+    // ── patrol
     const way=[]; let dir=1;
     for (let z=zone.z0+4; z<=zone.z1-2; z+=9){
       if (dir>0){ way.push([zone.x0+3,z]); way.push([zone.x1-3,z]); }
@@ -592,7 +682,7 @@
       theta-=(e.clientX-drag.x)*0.005; phi=Math.min(1.35,Math.max(0.1,phi+(e.clientY-drag.y)*0.004));
       drag={x:e.clientX,y:e.clientY};});
     window.addEventListener('pointerup',()=>drag=null);
-    canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.min(240,Math.max(16,dist+e.deltaY*0.06));},{passive:false});
+    canvas.addEventListener('wheel',e=>{e.preventDefault();dist=Math.min(260,Math.max(14,dist+e.deltaY*0.06));},{passive:false});
     const keys={};
     window.addEventListener('keydown',e=>{const k=e.key.toLowerCase();if('wasd'.includes(k)){keys[k]=true;}});
     window.addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
@@ -601,8 +691,32 @@
     function animate(){
       requestAnimationFrame(animate);
       const dt=Math.min(clock.getDelta(),0.05);
+      const now=performance.now();
       blades.forEach(b=>b.rotation.y+=dt*45);
-      zoneMesh.material.opacity=0.08+0.04*Math.sin(performance.now()*0.002);
+      zoneMesh.material.opacity=0.08+0.04*Math.sin(now*0.002);
+
+      // elephants wander
+      herd.forEach(e=>{
+        const u=e.userData;
+        u.heading += (rng()-0.5)*0.5*dt;
+        const nx=e.position.x+Math.cos(u.heading)*u.spd*dt;
+        const nz=e.position.z+Math.sin(u.heading)*u.spd*dt;
+        const ddx=nx-u.ox, ddz=nz-u.oz;
+        if (ddx*ddx+ddz*ddz>300){ u.heading=Math.atan2(u.oz-nz,u.ox-nx); }
+        else { e.position.x=nx; e.position.z=nz; }
+        e.position.y=groundY(e.position.x,e.position.z);
+        e.rotation.y=-u.heading;
+        if (u.trunk) u.trunk.rotation.x=Math.sin(now*0.0012+u.a)*0.18;
+      });
+      // birds circle
+      birds.forEach(b=>{
+        const u=b.userData;
+        u.a+=u.sp*dt;
+        b.position.set(u.cx+Math.cos(u.a)*u.r, u.h+Math.sin(u.a*2)*1.5, u.cz+Math.sin(u.a)*u.r);
+        b.rotation.y=-u.a;
+        const flap=Math.sin(now*0.012)*0.6;
+        u.w1.rotation.y=flap; u.w2.rotation.y=-flap;
+      });
 
       if (playing){
         const spdUnits=speed/M_PER_UNIT*6;
@@ -627,7 +741,7 @@
       }
       const gy=groundY(dronePos.x,dronePos.z);
       drone.position.set(dronePos.x, gy+altM/M_PER_UNIT, dronePos.z);
-      drone.rotation.z=Math.sin(performance.now()*0.0015)*0.04;
+      drone.rotation.z=Math.sin(now*0.0015)*0.04;
 
       const pan=30*dt;
       if(keys.w)target.z-=pan; if(keys.s)target.z+=pan;
@@ -644,7 +758,8 @@
       const swathM=Math.round(swathUnits*M_PER_UNIT);
       document.getElementById('simHud').innerHTML=
         'MODE <b>'+mode+'</b> · ALT <b>'+altM+' m</b> · SPD <b>'+speed+' m/s</b> (×6 time-lapse)<br>'+
-        'FOV 90° → swath <b>'+swathM+' m</b> · covered <b>'+covered.toFixed(2)+' km²</b> · battery <b>'+Math.max(0,Math.round(battery))+'%</b>';
+        'FOV 90° → swath <b>'+swathM+' m</b> · covered <b>'+covered.toFixed(2)+' km²</b> · battery <b>'+Math.max(0,Math.round(battery))+'%</b>'+
+        (HM? ' · terrain: real DEM':'');
 
       const w=canvas.clientWidth, h=canvas.clientHeight;
       if (canvas.width!==w||canvas.height!==h){ renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
@@ -652,6 +767,8 @@
     }
     renderer.setPixelRatio(Math.min(devicePixelRatio,2));
     animate();
+
+    }); // end loadDEM
   })();
   </script>
 
